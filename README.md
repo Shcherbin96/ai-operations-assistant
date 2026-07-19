@@ -13,7 +13,14 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: `v1.2.0` — all eight stages complete and live.** A plain-language request → an
+![The Telegram approval flow: a read-only search auto-runs, and a gated send pauses for a
+human — showing the resolved recipient, not a placeholder — before anything leaves the
+building.](docs/assets/approval-flow.svg)
+
+*Architecture: [`docs/architecture.md`](docs/architecture.md) · Decisions:
+[`docs/adr/`](docs/adr/) · Threat model: [`SECURITY.md`](SECURITY.md)*
+
+> ✅ **Status: `v1.3.0` — all eight stages complete and live.** A plain-language request → an
 > **LLM produces a structured plan** → the server re-derives risk and gates side-effects behind
 > approval → executes → append-only audit. Plan steps can now feed each other: a later step
 > references an earlier step's real output with `{{step_id.field}}` (**inter-step data-flow**),
@@ -22,8 +29,10 @@ it does so **under control** — the model never holds authority it can grant it
 > against real **Gmail/Calendar** (verified live); a **knowledge base** answers policy questions
 > with citations; **n8n** workflows run via signed webhooks; and an **eval gate** plus `/metrics`
 > keep it honest, and it **deploys always-on** as a sandbox-only public demo bot
-> ([DEPLOY.md](DEPLOY.md)). 202 unit tests (100% coverage, strict mypy, 3-OS CI), 10 Postgres
-> integration tests, and a verified Docker build. This section always tells the truth about what works.
+> ([DEPLOY.md](DEPLOY.md)). The approval preview and the append-only audit show the *resolved*
+> action, so what a human approves is exactly what runs ([SECURITY.md](SECURITY.md)). 229 unit
+> tests (100% coverage, strict mypy, 3-OS CI), 10 Postgres integration tests, and a verified
+> Docker build. This section always tells the truth about what works.
 
 ---
 
@@ -158,6 +167,10 @@ so the project delivers value continuously instead of becoming a never-ending pl
       so steps compose into real multi-step workflows instead of isolated actions.
 - [x] **v1.2 — Always-on demo.** Sandbox-only public bot deployed 24/7 (Fly.io worker),
       with per-user rate limiting to guard the LLM budget. See [DEPLOY.md](DEPLOY.md).
+- [x] **v1.3 — Hardening pass.** Driven by a multi-lens self-audit: the approval preview
+      and audit now show/record the *resolved* action (what you approve is what runs);
+      threat model ([SECURITY.md](SECURITY.md)), architecture doc, and ADRs; reliability
+      (LLM timeouts, outage logging, graceful shutdown); and an honesty sweep of the docs.
 
 ## Out of scope (v1)
 

@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.3.0 — 2026-07-20
+
+A hardening pass driven by a multi-lens self-audit of the codebase, executed as a
+series of test-first, adversarially-reviewed PRs.
+
+### Fixed / hardened
+
+- **Informed approval (the headline).** On Telegram — the primary approval surface —
+  a human approved an external send seeing only the tool name, and for a data-flow
+  step the recipient was resolved from untrusted upstream output *after* approval.
+  Now the approval preview and the audit record the **resolved** action, and — in the
+  security core — a `{{step.field}}` reference must name a **declared dependency**, so
+  approval-time resolution equals execution-time resolution: *what you approve is what
+  runs*. An adversarial review of this change caught and fixed a body-redaction leak
+  and an over-broad rule before merge.
+- **Audit records the action.** `STEP_STARTED` / `STEP_SUCCEEDED` / `APPROVAL_REQUESTED`
+  now carry the resolved arguments and a result digest, with **provenance-aware
+  redaction** — the immutable log can answer "who did this send go to?" without ever
+  storing a message body.
+- **Calendar.** `calendar.create_event` silently dropped `start` / `end` / `attendees`;
+  they are now forwarded (live) and echoed (sandbox).
+- **Reliability.** LLM client timeout + retries; provider-outage logging; the Telegram
+  handler now reports a refused plan instead of ghosting the user; graceful shutdown on
+  SIGTERM for the always-on bot.
+
+### Added
+
+- Threat model (`SECURITY.md`), an architecture doc (`docs/architecture.md`), ADRs
+  (`docs/adr/`), and a visual of the approval flow.
+- A whole-registry property test pinning "the model cannot lower risk", an injection
+  end-to-end test through the data-flow path, and a resolver robustness test.
+
+### Docs
+
+- An honesty sweep: removed README claims for capabilities that weren't built (RAG
+  permission filters / source snapshots, latency/token/cost dashboards, gateway retry,
+  screenshots/demo video), fixed contradictory test counts, and single-sourced the API
+  version (the Swagger UI announced a stale one).
+
 ## 1.2.0 — 2026-07-19
 
 ### Added
