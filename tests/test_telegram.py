@@ -272,6 +272,23 @@ def test_allowlist_blocks_callback_from_unlisted_user() -> None:
     assert not tx.edits
 
 
+def test_handle_message_reports_a_refused_plan_instead_of_ghosting() -> None:
+    # When the server refuses an unsafe plan, submit() raises. The user must get a
+    # reply, not silence — the refusal is the safety layer working.
+    from ops_assistant.errors import PlanValidationError
+
+    class _Refuser:
+        def submit(self, *, text: str, user: str, source: str) -> object:
+            raise PlanValidationError("that tool is not available")
+
+    tx = FakeTransport()
+    bot = TelegramBot(_Refuser(), tx)  # type: ignore[arg-type]
+    bot.handle_message(chat_id=1, user_id=1, user_name="roman", text="do something unsupported")
+    assert len(tx.sent) == 1
+    assert "couldn't safely" in tx.sent[0].text.lower()
+    assert "that tool is not available" in tx.sent[0].text
+
+
 def test_rate_limiter_blocks_a_burst_without_calling_the_service() -> None:
     from ops_assistant.telegram.bot import RATE_LIMITED
     from ops_assistant.telegram.ratelimit import RateLimiter

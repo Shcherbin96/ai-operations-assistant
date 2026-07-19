@@ -5,7 +5,10 @@ schema validation, repair loop, fail-closed fallback) is tested without a key or
 network. The live OpenAI-compatible client is I/O.
 """
 
+import logging
 from dataclasses import dataclass, field
+
+import pytest
 
 from ops_assistant.models import OperationRequest
 from ops_assistant.planner.base import Planner
@@ -76,12 +79,15 @@ def test_invalid_json_is_repaired_on_retry() -> None:
     assert len(llm.calls) == 2  # one repair attempt
 
 
-def test_persistently_invalid_output_fails_closed() -> None:
+def test_persistently_invalid_output_fails_closed(caplog: pytest.LogCaptureFixture) -> None:
     planner, _ = _planner("garbage", "still garbage", "and again")
-    plan = planner.plan(_req("x"))
+    with caplog.at_level(logging.WARNING):
+        plan = planner.plan(_req("x"))
     # No crash, no fabricated steps: a safe clarification instead.
     assert plan.requires_clarification is True
     assert plan.steps == []
+    # ...and the failure is logged, so a provider outage isn't invisible.
+    assert any("valid plan" in r.getMessage() for r in caplog.records)
 
 
 def test_system_prompt_lists_tools_and_forbids_injection() -> None:
@@ -94,24 +100,30 @@ def test_system_prompt_lists_tools_and_forbids_injection() -> None:
     assert "{{step_id.field}}" in system  # the data-flow reference syntax is documented
 
 
-def test_client_failure_fails_closed_instead_of_crashing() -> None:
+def test_client_failure_fails_closed_instead_of_crashing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class Boom:
         def complete(self, *, system: str, user: str) -> str:
             raise RuntimeError("provider unavailable")
 
     planner = LLMPlanner(Boom(), build_sandbox_registry())
-    plan = planner.plan(_req("x"))  # must not raise
+    with caplog.at_level(logging.WARNING):
+        plan = planner.plan(_req("x"))  # must not raise
     assert plan.requires_clarification is True
     assert plan.steps == []
+    assert any("provider call failed" in r.getMessage().lower() for r in caplog.records)
 
 
-def test_non_string_client_reply_fails_closed() -> None:
+def test_non_string_client_reply_fails_closed(caplog: pytest.LogCaptureFixture) -> None:
     class Weird:
         def complete(self, *, system: str, user: str) -> str:
             return None  # type: ignore[return-value]
 
     planner = LLMPlanner(Weird(), build_sandbox_registry())
-    assert planner.plan(_req("x")).requires_clarification is True
+    with caplog.at_level(logging.WARNING):
+        assert planner.plan(_req("x")).requires_clarification is True
+    assert any("non-string" in r.getMessage().lower() for r in caplog.records)
 
 
 def test_schema_violation_does_not_become_a_plan() -> None:

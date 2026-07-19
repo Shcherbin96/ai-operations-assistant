@@ -16,8 +16,14 @@ class OpenAILLMClient:
         model: str,
         base_url: str | None = None,
         temperature: float = 0.0,
+        timeout: float = 30.0,
+        max_retries: int = 2,
     ) -> None:
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # A bounded timeout + retries: a hung or flaky provider must not wedge the
+        # planner (which runs on the request hot path) indefinitely.
+        self._client = OpenAI(
+            api_key=api_key, base_url=base_url, timeout=timeout, max_retries=max_retries
+        )
         self._model = model
         self._temperature = temperature
 
