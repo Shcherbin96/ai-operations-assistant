@@ -274,6 +274,9 @@ class OpsService:
     def audit_for(self, workflow_id: str) -> tuple[AuditEvent, ...]:
         return self._audit.for_workflow(workflow_id)
 
+    def all_audit(self) -> tuple[AuditEvent, ...]:
+        return self._audit.events()
+
     # --- Execution engine ---
 
     def _run(self, wf: _Workflow) -> None:
