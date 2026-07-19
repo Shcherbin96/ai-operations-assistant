@@ -10,12 +10,15 @@ proposes still passes the server-side policy engine unchanged.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Protocol
 
 from pydantic import ValidationError
 
 from ops_assistant.models import OperationRequest, Plan
 from ops_assistant.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_TEMPLATE = """You are an operations planning assistant. Turn the user's request \
 into a STRUCTURED PLAN as JSON, and nothing else.
@@ -85,6 +88,14 @@ class LLMPlanner:
             plan = self._parse(self._complete(system, repair))
 
         if plan is None:
+            # Persistently invalid output after the repair attempt. Failing closed
+            # is safe, but a silent failure hides a provider outage or a broken
+            # model — log it so it is visible in the logs (and to an operator).
+            logger.warning(
+                "LLM planner failed to produce a valid plan after %d repair attempt(s); "
+                "returning a clarification",
+                self._max_repairs,
+            )
             return Plan(
                 summary="Could not produce a plan",
                 requires_clarification=True,
@@ -101,8 +112,15 @@ class LLMPlanner:
         try:
             reply = self._client.complete(system=system, user=user)
         except Exception:
+            logger.warning("LLM provider call failed; failing closed", exc_info=True)
             return ""
-        return reply if isinstance(reply, str) else ""
+        if not isinstance(reply, str):
+            logger.warning(
+                "LLM provider returned a non-string reply (%s); failing closed",
+                type(reply).__name__,
+            )
+            return ""
+        return reply
 
     def _parse(self, raw: str) -> Plan | None:
         try:

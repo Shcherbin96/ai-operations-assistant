@@ -5,6 +5,9 @@ Reads the token (and optional user allowlist / database URL) from the environmen
 
 from __future__ import annotations
 
+import signal
+from types import FrameType
+
 from ops_assistant.config import get_settings
 from ops_assistant.factory import service_from_settings
 from ops_assistant.telegram.bot import TelegramBot
@@ -33,8 +36,21 @@ def main() -> None:  # pragma: no cover - live entrypoint
     )
     transport = HttpTelegramTransport(settings.telegram_token)
     bot = TelegramBot(service, transport, allowed or None, limiter)
+
+    # Graceful shutdown: a Fly redeploy sends SIGTERM. Stop after the current poll
+    # instead of being SIGKILLed mid-request, so no in-flight work is torn open.
+    stopping = False
+
+    def _request_stop(signum: int, _frame: FrameType | None) -> None:
+        nonlocal stopping
+        stopping = True
+        print(f"received {signal.Signals(signum).name}; finishing the current poll then exiting…")
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    signal.signal(signal.SIGINT, _request_stop)
+
     print("AI Operations Assistant bot is polling. Press Ctrl+C to stop.")
-    run_polling(bot, transport)
+    run_polling(bot, transport, should_stop=lambda: stopping)
 
 
 if __name__ == "__main__":  # pragma: no cover

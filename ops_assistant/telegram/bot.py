@@ -130,7 +130,14 @@ class TelegramBot:
         if self._limiter is not None and not self._limiter.allow(user_id):
             self._tx.send_message(chat_id, RATE_LIMITED)
             return
-        view = self._svc.submit(text=text, user=user_name, source="telegram")
+        try:
+            view = self._svc.submit(text=text, user=user_name, source="telegram")
+        except OpsAssistantError as exc:
+            # The server refused the plan (unknown/disabled tool, bad args, a
+            # disallowed reference). That refusal IS the safety layer working —
+            # tell the user instead of leaving them with no reply.
+            self._tx.send_message(chat_id, f"⚠️ I couldn't safely act on that: {exc.message}")
+            return
         body, buttons = self._render(view)
         self._tx.send_message(chat_id, body, buttons)
 
