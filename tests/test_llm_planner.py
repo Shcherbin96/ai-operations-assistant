@@ -93,6 +93,26 @@ def test_system_prompt_lists_tools_and_forbids_injection() -> None:
     assert "ignore" in system.lower()  # prompt-injection guardrail is stated
 
 
+def test_client_failure_fails_closed_instead_of_crashing() -> None:
+    class Boom:
+        def complete(self, *, system: str, user: str) -> str:
+            raise RuntimeError("provider unavailable")
+
+    planner = LLMPlanner(Boom(), build_sandbox_registry())
+    plan = planner.plan(_req("x"))  # must not raise
+    assert plan.requires_clarification is True
+    assert plan.steps == []
+
+
+def test_non_string_client_reply_fails_closed() -> None:
+    class Weird:
+        def complete(self, *, system: str, user: str) -> str:
+            return None  # type: ignore[return-value]
+
+    planner = LLMPlanner(Weird(), build_sandbox_registry())
+    assert planner.plan(_req("x")).requires_clarification is True
+
+
 def test_schema_violation_does_not_become_a_plan() -> None:
     # Well-formed JSON but wrong shape (steps not a list) -> repaired/failed-closed.
     planner, _ = _planner('{"summary": 5, "steps": "nope"}', "also bad")

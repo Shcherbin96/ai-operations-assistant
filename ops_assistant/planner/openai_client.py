@@ -30,4 +30,9 @@ class OpenAILLMClient:
                 {"role": "user", "content": user},
             ],
         )
-        return response.choices[0].message.content or ""
+        # Providers (OpenRouter, Gemini) can return an empty choices list on a 200
+        # (e.g. a safety block). Degrade to "" so the planner fails closed.
+        if not response.choices:
+            return ""
+        message = response.choices[0].message
+        return (message.content or "") if message is not None else ""

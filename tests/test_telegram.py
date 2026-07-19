@@ -70,6 +70,35 @@ def test_read_only_request_replies_completed_without_buttons() -> None:
     assert tx.sent[0].buttons is None
 
 
+def test_read_only_result_is_shown_not_just_status() -> None:
+    # The point of asking: the reply must contain the actual answer (the free
+    # slots), not merely "succeeded".
+    bot, tx = _bot()
+    _msg(bot, "find free time")
+    text = tx.sent[0].text
+    assert "2026-07-20" in text  # a real free-slot time from the sandbox
+
+
+def test_email_search_result_lists_the_messages() -> None:
+    bot, tx = _bot()
+    _msg(bot, "draft replies to recent emails")
+    text = tx.sent[0].text
+    assert "anna@example.com" in text  # a found sender is shown, not hidden
+
+
+def test_format_output_renders_every_shape() -> None:
+    from ops_assistant.telegram.bot import _format_output
+
+    assert "(nothing found)" in _format_output([])
+    assert "a@b.c — Hi" in _format_output([{"from": "a@b.c", "subject": "Hi"}])
+    assert "Standup (2026-07-20)" in _format_output([{"title": "Standup", "start": "2026-07-20"}])
+    assert "09:00 → 10:00" in _format_output([{"start": "09:00", "end": "10:00"}])
+    assert "and 3 more" in _format_output([{"x": i} for i in range(8)])
+    assert "draft_id: d1" in _format_output({"draft_id": "d1", "to": "a@b.c"})
+    assert _format_output("done") == "   done"
+    assert "plain" in _format_output(["plain"])
+
+
 def test_send_request_shows_approve_and_reject_buttons() -> None:
     bot, tx = _bot()
     _msg(bot, "send an email to anna@example.com")

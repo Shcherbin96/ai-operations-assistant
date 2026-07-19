@@ -69,7 +69,7 @@ class LLMPlanner:
     def plan(self, request: OperationRequest) -> Plan:
         system = SYSTEM_TEMPLATE.format(tools=_tool_catalogue(self._registry))
         user = request.text
-        plan = self._parse(self._client.complete(system=system, user=user))
+        plan = self._parse(self._complete(system, user))
 
         attempts = 0
         while plan is None and attempts < self._max_repairs:
@@ -78,7 +78,7 @@ class LLMPlanner:
                 "Your previous reply was not valid JSON for the plan schema. "
                 "Return ONLY a valid JSON object for this request:\n\n" + user
             )
-            plan = self._parse(self._client.complete(system=system, user=repair))
+            plan = self._parse(self._complete(system, repair))
 
         if plan is None:
             return Plan(
@@ -89,6 +89,16 @@ class LLMPlanner:
                 ),
             )
         return plan
+
+    def _complete(self, system: str, user: str) -> str:
+        # The call is I/O: a provider error, timeout, or empty response must not
+        # crash the workflow. Any failure becomes an empty reply, which the
+        # parse/repair/fail-closed path turns into a clarification.
+        try:
+            reply = self._client.complete(system=system, user=user)
+        except Exception:
+            return ""
+        return reply if isinstance(reply, str) else ""
 
     def _parse(self, raw: str) -> Plan | None:
         try:
