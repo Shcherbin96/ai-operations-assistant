@@ -7,7 +7,8 @@ no update or delete, and the read view is an immutable tuple, so history cannot 
 rewritten through this interface.
 
 In Stage 1 this is an in-memory list. Stage 2 backs the same interface with a
-Postgres table whose append-only property is enforced by GRANTs and triggers.
+Postgres table whose append-only property is enforced by triggers that reject
+UPDATE, DELETE, and TRUNCATE (and, in production, a least-privilege app role).
 """
 
 from __future__ import annotations

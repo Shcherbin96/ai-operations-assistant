@@ -105,6 +105,16 @@ class PostgresApprovalStore:
                 .values(_approval_row(approval))
             )
 
+    def compare_and_set(self, approval: Approval, *, expected_status: ApprovalStatus) -> bool:
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                update(schema.approvals)
+                .where(schema.approvals.c.id == approval.id)
+                .where(schema.approvals.c.status == expected_status.value)
+                .values(_approval_row(approval))
+            )
+        return result.rowcount == 1
+
     def pending_for_workflow(self, workflow_id: str) -> tuple[Approval, ...]:
         with self._engine.connect() as conn:
             rows = (

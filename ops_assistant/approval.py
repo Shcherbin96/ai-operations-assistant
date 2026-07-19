@@ -63,6 +63,12 @@ class ApprovalStore(Protocol):
 
     def update(self, approval: Approval) -> None: ...
 
+    def compare_and_set(self, approval: Approval, *, expected_status: ApprovalStatus) -> bool:
+        """Atomically write ``approval`` only if the stored status still equals
+        ``expected_status``. Returns whether the write happened. This makes the
+        single-use decision a compare-and-swap even across processes."""
+        ...
+
     def pending_for_workflow(self, workflow_id: str) -> tuple[Approval, ...]: ...
 
 
@@ -78,6 +84,13 @@ class InMemoryApprovalStore:
 
     def update(self, approval: Approval) -> None:
         self._approvals[approval.id] = approval
+
+    def compare_and_set(self, approval: Approval, *, expected_status: ApprovalStatus) -> bool:
+        current = self._approvals.get(approval.id)
+        if current is None or current.status is not expected_status:
+            return False
+        self._approvals[approval.id] = approval
+        return True
 
     def pending_for_workflow(self, workflow_id: str) -> tuple[Approval, ...]:
         return tuple(
@@ -194,5 +207,12 @@ class ApprovalEngine:
                 "decision_reason": reason,
             }
         )
-        self._store.update(decided)
+        # Compare-and-set closes the cross-process race: if another writer decided
+        # this approval between our read and here, the swap fails and we refuse.
+        if not self._store.compare_and_set(decided, expected_status=ApprovalStatus.PENDING):
+            # Only reachable when a concurrent (cross-process) writer won the swap;
+            # proven by the Postgres concurrent-approve integration test.
+            raise ApprovalAlreadyDecidedError(  # pragma: no cover
+                f"approval {approval_id} was decided concurrently"
+            )
         return decided

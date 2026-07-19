@@ -1,13 +1,17 @@
 """The tool gateway: the *only* component that actually calls a tool.
 
 Everything reaches external effects through here, so this is where idempotency and
-tool-level auditing live. An ``idempotency_key`` that has already run returns the
-stored result without invoking the handler again — tapping *Approve* twice, or a
-retried request, cannot send an email or create an event twice.
+tool-level auditing live. An ``idempotency_key`` that has already completed returns
+the stored result without invoking the handler again — a retried request, or
+tapping *Approve* twice within a process, cannot run the tool twice.
 
 Where executed results are remembered is an :class:`IdempotencyStore` (in memory
-here, a Postgres ``tool_executions`` table with the key as its primary key in
-Stage 2, so the guarantee holds across restarts and processes).
+here, a Postgres ``tool_executions`` table keyed on the idempotency key in Stage 2,
+so a completed execution is remembered across restarts). Cross-process, a given
+approved step reaches this method exactly once because the upstream approval
+decision is a compare-and-set (see ``approval.py``); the residual window — a crash
+*between* the handler firing and the result being recorded — is not yet closed by a
+reserve-before-execute, and is noted as future work.
 """
 
 from __future__ import annotations

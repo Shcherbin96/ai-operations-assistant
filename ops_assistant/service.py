@@ -110,10 +110,12 @@ class OpsService:
         self._id_factory = id_factory
         self._ttl = approval_ttl
         self._workflows: WorkflowStore = store or InMemoryWorkflowStore()
-        # Sync endpoints run in a threadpool; serialize state mutations so the
-        # check-then-act sequences (approval single-use, gateway idempotency,
-        # state transitions) are atomic. Stage 2 replaces this with DB row locks
-        # / unique constraints across processes.
+        # Sync endpoints run in a threadpool; this lock serializes state mutations
+        # within the process. Across processes, correctness rests on the database:
+        # workflow writes use optimistic version locking (ConflictError) and
+        # approval decisions are a compare-and-set. Known gap: the approval, tool
+        # execution, and workflow save are separate transactions, so a crash mid-
+        # approve can wedge a workflow — a single unit-of-work is future work.
         self._lock = threading.RLock()
 
     # --- Public API ---
@@ -141,6 +143,7 @@ class OpsService:
             if plan.requires_clarification:
                 wf.requires_clarification = True
                 wf.clarification_question = plan.clarification_question
+                self._workflows.save(wf)
                 return self._view(wf)
 
             self._to(wf, WorkflowStatus.VALIDATING)
@@ -149,6 +152,7 @@ class OpsService:
             except OpsAssistantError:
                 self._to(wf, WorkflowStatus.FAILED)
                 self._audit.append(wid, AuditEventType.WORKFLOW_FAILED, actor="policy")
+                self._workflows.save(wf)
                 raise
 
             wf.plan_fingerprint = plan_fingerprint(plan)
