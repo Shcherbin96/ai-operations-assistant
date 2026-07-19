@@ -90,3 +90,30 @@ def resolve_references(
 ) -> dict[str, object]:
     """Return ``arguments`` with every ``{{step.field}}`` reference resolved."""
     return {key: _resolve_value(value, outputs) for key, value in arguments.items()}
+
+
+def referenced_steps(arguments: Mapping[str, object]) -> set[str]:
+    """The set of step ids referenced by ``{{step_id.field}}`` anywhere in ``arguments``.
+
+    The policy engine uses this to require that a step declares (in ``depends_on``)
+    every step it references — so a reference resolves against an *already-succeeded
+    dependency*, never an unrelated later step. That equality is what lets an
+    approval preview show the value that will actually execute.
+    """
+    found: set[str] = set()
+    _collect_refs(arguments, found)
+    return found
+
+
+def _collect_refs(value: object, found: set[str]) -> None:
+    if isinstance(value, str):
+        for match in _REF.finditer(value):
+            step, _ = _parse_ref(match.group(1))
+            if step:
+                found.add(step)
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            _collect_refs(item, found)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_refs(item, found)

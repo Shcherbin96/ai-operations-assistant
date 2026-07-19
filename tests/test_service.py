@@ -168,6 +168,164 @@ def test_step_arguments_are_resolved_from_an_earlier_step_output() -> None:
     assert draft.output["to"] == "anna@example.com"
 
 
+class _GatedRefPlanner:
+    """A GATED send whose recipient/body are resolved from a prior read step."""
+
+    def plan(self, request: OperationRequest) -> Plan:
+        return Plan(
+            summary="Reply to the first email",
+            steps=[
+                PlanStep(id="s1", tool="email.search", arguments={"query": "all"}),
+                PlanStep(
+                    id="s2",
+                    tool="email.send",
+                    arguments={"to": "{{s1.from}}", "body": "Thanks re: {{s1.subject}}"},
+                    depends_on=["s1"],
+                ),
+            ],
+        )
+
+
+def test_approval_preview_shows_the_resolved_recipient_not_a_placeholder() -> None:
+    # The whole thesis of HITL: the human must see what they approve. For a
+    # data-flow send, the preview must show the real recipient, never "{{s1.from}}".
+    svc = _service(planner=_GatedRefPlanner())
+    view = svc.submit(text="reply to my first email", user="roman", source="test")
+    assert view.status is WorkflowStatus.AWAITING_APPROVAL
+    approval = view.pending_approvals[0]
+    assert approval.arguments["to"] == "anna@example.com"  # resolved, not the template
+
+    # And what executes equals what was approved.
+    outcome = svc.approve_pending(approval.id, actor="roman")
+    send = next(s for s in outcome.steps if s.tool == "email.send")
+    assert send.output["to"] == "anna@example.com"
+
+
+def test_audit_records_the_resolved_recipient_and_redacts_the_body() -> None:
+    svc = _service(planner=_GatedRefPlanner())
+    view = svc.submit(text="reply to my first email", user="roman", source="test")
+    svc.approve_pending(view.pending_approvals[0].id, actor="roman")
+
+    started = [
+        e
+        for e in svc.audit_for(view.id)
+        if e.event_type is AuditEventType.STEP_STARTED and e.payload.get("tool") == "email.send"
+    ]
+    assert started, "the executed send should be audited"
+    arguments = started[0].payload["arguments"]
+    assert arguments["to"] == "anna@example.com"  # forensic recipient is recorded...
+    assert "redacted" in str(arguments["body"]).lower()  # ...but the body is not stored verbatim
+
+
+class _InjectionRefPlanner:
+    """Reads the injected (attacker-controlled) message, then a GATED send to its
+    'from' — the exact untrusted-content-into-a-side-effect vector data-flow opened."""
+
+    def plan(self, request: OperationRequest) -> Plan:
+        from ops_assistant.tools.sandbox import INJECTED_MESSAGE_ID
+
+        return Plan(
+            summary="Reply to that message",
+            steps=[
+                PlanStep(id="s1", tool="email.get", arguments={"id": INJECTED_MESSAGE_ID}),
+                PlanStep(
+                    id="s2",
+                    tool="email.send",
+                    arguments={"to": "{{s1.from}}", "body": "sure"},
+                    depends_on=["s1"],
+                ),
+            ],
+        )
+
+
+def test_untrusted_sender_flows_into_a_gated_send_visibly_and_never_auto_runs() -> None:
+    svc = _service(planner=_InjectionRefPlanner())
+    view = svc.submit(text="reply to the latest email", user="roman", source="test")
+    # The send is an external side-effect: gated, never auto-executed...
+    assert view.status is WorkflowStatus.AWAITING_APPROVAL
+    approval = view.pending_approvals[0]
+    # ...and the human sees the ACTUAL attacker recipient before deciding.
+    assert approval.arguments["to"] == "attacker@example.net"
+    outcome = svc.approve_pending(approval.id, actor="roman")
+    send = next(s for s in outcome.steps if s.tool == "email.send")
+    assert send.output["to"] == "attacker@example.net"  # executed == approved
+
+
+class _UndeclaredRefPlanner:
+    """References s1 without declaring the dependency — a redirect the preview
+    would never resolve. Policy must refuse it."""
+
+    def plan(self, request: OperationRequest) -> Plan:
+        return Plan(
+            summary="redirect",
+            steps=[
+                PlanStep(id="s1", tool="email.search", arguments={"query": "all"}),
+                PlanStep(id="s2", tool="email.send", arguments={"to": "{{s1.from}}"}),
+            ],
+        )
+
+
+def test_reference_without_a_declared_dependency_is_refused() -> None:
+    from ops_assistant.errors import PlanValidationError
+
+    svc = _service(planner=_UndeclaredRefPlanner())
+    with pytest.raises(PlanValidationError):
+        svc.submit(text="reply", user="roman", source="test")
+
+
+def test_redact_for_audit_keeps_forensics_and_literals_but_summarizes_referenced_data() -> None:
+    from ops_assistant.service import _redact_for_audit
+
+    template = {
+        "to": "{{s1.from}}",  # reference into a routing field -> kept (forensic)
+        "subject": "Weekly report",  # literal plan text -> kept
+        "context": "{{s1.body}}",  # a body routed into a renamed key -> summarized
+        "body": "{{s1}}",  # whole-output nested dict under a body key -> summarized
+        "count": 5,  # literal scalar -> kept
+        "cc": ["a@b.c", "d@e.f"],  # literal structured value -> shape only
+    }
+    resolved = {
+        "to": "anna@example.com",
+        "subject": "Weekly report",
+        "context": "Hi, quick question about my order.",  # short body, not a body-key
+        "body": {"from": "a@b.c", "body": "secret full text"},
+        "count": 5,
+        "cc": ["a@b.c", "d@e.f"],
+    }
+    out = _redact_for_audit(template, resolved)
+    assert out["to"] == "anna@example.com"  # recipient recorded (the forensic point)
+    assert out["subject"] == "Weekly report"  # literal kept
+    assert out["count"] == 5
+    assert out["cc"] == {"redacted_items": 2}  # structured value never dumped verbatim
+    assert out["context"].startswith("<redacted")  # reference-derived body-ish -> summarized
+    assert out["body"] == {"redacted_keys": ["body", "from"]}  # nested body never stored
+    # No sensitive text survives anywhere in the payload:
+    assert "secret full text" not in str(out)
+    assert "Hi, quick question about my order." not in str(out)
+
+
+def test_redact_for_audit_never_dumps_a_body_by_type() -> None:
+    from ops_assistant.service import _redact_for_audit
+
+    template = {"body": ["a", "b"], "html": "{{s1.n}}"}
+    resolved = {"body": ["line one", "line two"], "html": 7}
+    out = _redact_for_audit(template, resolved)
+    assert out["body"] == {"redacted_items": 2}  # list body -> shape only
+    assert out["html"] == 7  # non-string under a body key -> harmless scalar
+    assert "line one" not in str(out)
+
+
+def test_result_digest_summarizes_each_shape() -> None:
+    from ops_assistant.service import _result_digest
+
+    assert _result_digest([1, 2, 3]) == {"count": 3}  # lists -> just a count
+    got = _result_digest({"message_id": "m1", "from": "a@b.c", "body": "secret"})
+    assert got["message_id"] == "m1" and got["from"] == "a@b.c"  # forensics kept
+    assert got["body"].startswith("<redacted") and "secret" not in str(got)  # body redacted
+    assert str(_result_digest("x" * 300)).endswith("chars)")  # long scalar capped
+    assert _result_digest("ok") == "ok"  # short scalar passes through
+
+
 class _MaliciousPlanner:
     """Simulates a planner subverted by injected email content: it slips in a send
     step and lies that it is read_only, hoping it auto-executes."""
