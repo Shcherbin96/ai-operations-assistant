@@ -58,6 +58,34 @@ class TelegramTransport(Protocol):
     def answer_callback(self, callback_id: str, text: str) -> None: ...
 
 
+def _summarize_item(item: object) -> str:
+    """A one-line, human-readable summary of one result item."""
+    if isinstance(item, dict):
+        if "from" in item and "subject" in item:
+            return f"{item['from']} — {item['subject']}"
+        if "title" in item and "start" in item:
+            return f"{item['title']} ({item['start']})"
+        if "start" in item and "end" in item:
+            return f"{item['start']} → {item['end']}"
+        parts = [f"{k}: {v}" for k, v in item.items() if k not in ("answered", "id")]
+        return ", ".join(parts) if parts else str(item)
+    return str(item)
+
+
+def _format_output(output: object) -> str:
+    """Render a tool result so the user sees the answer, not just 'succeeded'."""
+    if isinstance(output, list):
+        if not output:
+            return "   (nothing found)"
+        lines = [f"   • {_summarize_item(item)}" for item in output[:5]]
+        if len(output) > 5:
+            lines.append(f"   … and {len(output) - 5} more")
+        return "\n".join(lines)
+    if isinstance(output, dict):
+        return f"   {_summarize_item(output)}"
+    return f"   {output}"
+
+
 class TelegramBot:
     def __init__(
         self,
@@ -129,6 +157,10 @@ class TelegramBot:
         for step in view.steps:
             emoji = _STATUS_EMOJI.get(step.status, "•")
             lines.append(f"{emoji} {step.tool} [{step.resolved_risk.value}] — {step.status.value}")
+            if step.status is StepStatus.SUCCEEDED and step.output is not None:
+                detail = _format_output(step.output)
+                if detail:
+                    lines.append(detail)
 
         buttons: list[list[Button]] | None = None
         if view.pending_approvals:

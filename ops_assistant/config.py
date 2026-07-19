@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # Google OAuth (Stage 4). Unset -> Gmail/Calendar tools fall back to the sandbox.
     google_client_secrets: str | None = None
     google_token_path: str = "token.json"
+    # LLM planner (OpenAI-compatible). Unset -> the deterministic demo planner.
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
 
 
 @lru_cache
