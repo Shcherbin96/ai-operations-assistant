@@ -13,9 +13,12 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> 🚧 **Status: Stage 0 — scaffolding.** Nothing is built yet beyond this README and the
-> project skeleton. The roadmap below is the plan, not a claim of what exists. This section
-> will always tell the truth about what actually works.
+> ✅ **Status: Stage 1 complete — the full control loop runs, keyless.** Plan → server-side
+> validation → auto-execute read-only → gate side-effects behind approval → execute →
+> append-only audit, over a set of sandbox tools that need no credentials. 96 tests, 100%
+> coverage, strict mypy, 3-OS CI. Stages 2–8 (Postgres, Telegram, real Gmail/Calendar, n8n,
+> RAG, evals, packaging) are still ahead — this section always tells the truth about what
+> actually works.
 
 ---
 
@@ -125,7 +128,7 @@ declines. That single eval demonstrates the whole thesis.
 Built in shippable stages — each stage is a complete, demonstrable artifact on its own,
 so the project delivers value continuously instead of becoming a never-ending platform.
 
-- [ ] **Stage 1 — Core workflow (no external APIs).** FastAPI, request models, planner
+- [x] **Stage 1 — Core workflow (no external APIs).** FastAPI, request models, planner
       protocol + demo planner, workflow state machine, risk policy, approval engine,
       sandbox tools, append-only audit, unit tests, CI. *A fully working demo with zero keys.*
 - [ ] **Stage 2 — Persistence.** Postgres for workflows, steps, approvals, audit events,
@@ -148,6 +151,39 @@ so the project delivers value continuously instead of becoming a never-ending pl
 Autonomous execution of destructive actions · payments / financial operations · legally
 binding actions · arbitrary code or shell execution · mass mailing · a full multi-agent
 framework · a real CRM · a mobile app. These are deliberate boundaries, documented as such.
+
+## Run it (no keys required)
+
+Requires [uv](https://docs.astral.sh/uv/). Everything runs against the sandbox tools.
+
+```bash
+uv sync                          # create the env (fetches Python 3.12 if needed)
+uv run python -m scripts.demo    # walk the three core scenarios end-to-end
+uv run python -m ops_assistant   # serve the API at http://127.0.0.1:8000
+```
+
+With the server running, submit a request and drive an approval over HTTP:
+
+```bash
+# 1) A gated send pauses for approval and returns a pending-approval id
+curl -s localhost:8000/requests -H 'content-type: application/json' \
+  -d '{"text":"send an email to anna@example.com","user":"roman"}'
+
+# 2) Approve it (substitute the ids from the response above)
+curl -s -X POST localhost:8000/workflows/<WORKFLOW_ID>/approvals/<APPROVAL_ID>/approve \
+  -H 'content-type: application/json' -d '{"actor":"roman"}'
+
+# 3) Read the full append-only audit trail
+curl -s localhost:8000/workflows/<WORKFLOW_ID>/audit
+```
+
+### Development
+
+```bash
+uv run pytest -v                                   # 96 tests
+uv run pytest --cov=ops_assistant --cov-report=term-missing
+uv run ruff check . && uv run ruff format --check . && uv run mypy ops_assistant scripts
+```
 
 ## Tech stack
 

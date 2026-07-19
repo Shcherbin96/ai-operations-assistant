@@ -1,0 +1,24 @@
+"""Runtime configuration, driven by environment variables (prefix ``OPS_``).
+
+Secrets never live in code. Local development reads a ``.env`` file; production
+supplies real environment variables or a secret store.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="OPS_", env_file=".env", extra="ignore")
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    approval_ttl_seconds: int = 3600
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
