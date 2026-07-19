@@ -25,6 +25,7 @@ class ErrorCode(StrEnum):
     STATE_TRANSITION = "state_transition_error"
     TOOL_EXECUTION = "tool_execution_error"
     DUPLICATE_EXECUTION = "duplicate_execution"
+    CONFLICT = "conflict"
     NOT_FOUND = "not_found"
 
 
@@ -90,6 +91,12 @@ class ToolExecutionError(OpsAssistantError):
 
 class DuplicateExecutionError(OpsAssistantError):
     code = ErrorCode.DUPLICATE_EXECUTION
+
+
+class ConflictError(OpsAssistantError):
+    """An optimistic-lock conflict: another writer changed the row first."""
+
+    code = ErrorCode.CONFLICT
 
 
 class NotFoundError(OpsAssistantError):

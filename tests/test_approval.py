@@ -127,6 +127,35 @@ def test_cancel_is_idempotent_on_a_decided_approval() -> None:
     assert engine.cancel(aid).status is ApprovalStatus.APPROVED
 
 
+def test_compare_and_set_only_writes_when_status_matches() -> None:
+    # The atomic swap that closes the cross-process double-decide race: it writes
+    # only if the stored status still equals the expected one.
+    from ops_assistant.approval import Approval, InMemoryApprovalStore
+
+    store = InMemoryApprovalStore()
+    pending = Approval(
+        id="a1",
+        workflow_id="wf1",
+        step_id="s1",
+        plan_fingerprint="fp",
+        tool="email.send",
+        arguments={},
+        risk="external_side_effect",
+        status=ApprovalStatus.PENDING,
+        created_at=datetime(2026, 7, 19, 12, 0, tzinfo=UTC),
+        expires_at=datetime(2026, 7, 19, 13, 0, tzinfo=UTC),
+    )
+    store.add(pending)
+    approved = pending.model_copy(update={"status": ApprovalStatus.APPROVED})
+
+    assert store.compare_and_set(approved, expected_status=ApprovalStatus.PENDING) is True
+    # Now stored status is APPROVED, so a second swap expecting PENDING is refused.
+    assert store.compare_and_set(approved, expected_status=ApprovalStatus.PENDING) is False
+    # An unknown id is also refused.
+    ghost = pending.model_copy(update={"id": "nope"})
+    assert store.compare_and_set(ghost, expected_status=ApprovalStatus.PENDING) is False
+
+
 def test_pending_for_workflow_lists_open_approvals() -> None:
     engine = _engine()
     _request(engine)

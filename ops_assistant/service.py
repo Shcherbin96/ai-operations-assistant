@@ -14,16 +14,15 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from ops_assistant.approval import Approval, ApprovalEngine
-from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog
+from ops_assistant.approval import Approval, ApprovalEngine, ApprovalStore
+from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog, AuditStore
 from ops_assistant.errors import NotFoundError, OpsAssistantError, StateTransitionError
-from ops_assistant.gateway import ToolGateway
+from ops_assistant.gateway import IdempotencyStore, ToolGateway
 from ops_assistant.models import (
     OperationRequest,
     RiskTier,
@@ -33,7 +32,11 @@ from ops_assistant.models import (
 )
 from ops_assistant.planner.base import Planner
 from ops_assistant.planner.demo import DemoPlanner
-from ops_assistant.policy import ApprovalDecision, PolicyConfig, PolicyEngine, ValidatedStep
+from ops_assistant.policy import ApprovalDecision, PolicyConfig, PolicyEngine
+from ops_assistant.state import StepRecord as _Step
+from ops_assistant.state import WorkflowRecord as _Workflow
+from ops_assistant.state import is_empty as _is_empty
+from ops_assistant.store import InMemoryWorkflowStore, WorkflowStore
 from ops_assistant.tools.registry import ToolRegistry
 from ops_assistant.tools.sandbox import build_sandbox_registry
 from ops_assistant.workflow import assert_step_transition, assert_workflow_transition
@@ -84,34 +87,6 @@ class WorkflowView(BaseModel):
     pending_approvals: list[ApprovalView]
 
 
-# --- Internal mutable state. ---
-
-
-@dataclass
-class _Step:
-    validated: ValidatedStep
-    status: StepStatus = StepStatus.PENDING
-    output: object | None = None
-    approval_id: str | None = None
-    error: str | None = None
-
-
-@dataclass
-class _Workflow:
-    id: str
-    request: OperationRequest
-    status: WorkflowStatus
-    summary: str = ""
-    requires_clarification: bool = False
-    clarification_question: str | None = None
-    plan_fingerprint: str = ""
-    steps: list[_Step] = field(default_factory=list)
-
-
-def _is_empty(output: object) -> bool:
-    return output is None or (isinstance(output, (list, tuple, dict, str)) and len(output) == 0)
-
-
 class OpsService:
     def __init__(
         self,
@@ -121,20 +96,26 @@ class OpsService:
         clock: Callable[[], datetime] = _utcnow,
         id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
         approval_ttl: timedelta = timedelta(hours=1),
+        store: WorkflowStore | None = None,
+        approval_store: ApprovalStore | None = None,
+        audit_store: AuditStore | None = None,
+        idempotency_store: IdempotencyStore | None = None,
     ) -> None:
         self._planner = planner or DemoPlanner()
         self._registry = registry or build_sandbox_registry()
         self._policy = PolicyEngine(self._registry, policy_config or PolicyConfig())
-        self._audit = AuditLog(clock=clock)
-        self._approvals = ApprovalEngine(clock=clock, id_factory=id_factory)
-        self._gateway = ToolGateway(self._registry, self._audit)
+        self._audit: AuditStore = audit_store or AuditLog(clock=clock)
+        self._approvals = ApprovalEngine(clock=clock, id_factory=id_factory, store=approval_store)
+        self._gateway = ToolGateway(self._registry, self._audit, idempotency_store)
         self._id_factory = id_factory
         self._ttl = approval_ttl
-        self._workflows: dict[str, _Workflow] = {}
-        # Sync endpoints run in a threadpool; serialize state mutations so the
-        # check-then-act sequences (approval single-use, gateway idempotency,
-        # state transitions) are atomic. Stage 2 replaces this with DB row locks
-        # / unique constraints across processes.
+        self._workflows: WorkflowStore = store or InMemoryWorkflowStore()
+        # Sync endpoints run in a threadpool; this lock serializes state mutations
+        # within the process. Across processes, correctness rests on the database:
+        # workflow writes use optimistic version locking (ConflictError) and
+        # approval decisions are a compare-and-set. Known gap: the approval, tool
+        # execution, and workflow save are separate transactions, so a crash mid-
+        # approve can wedge a workflow — a single unit-of-work is future work.
         self._lock = threading.RLock()
 
     # --- Public API ---
@@ -144,7 +125,7 @@ class OpsService:
             wid = self._id_factory()
             request = OperationRequest(id=wid, text=text, user=user, source=source)
             wf = _Workflow(id=wid, request=request, status=WorkflowStatus.CREATED)
-            self._workflows[wid] = wf
+            self._workflows.create(wf)
             self._audit.append(
                 wid, AuditEventType.REQUEST_CREATED, actor=user, payload={"source": source}
             )
@@ -162,6 +143,7 @@ class OpsService:
             if plan.requires_clarification:
                 wf.requires_clarification = True
                 wf.clarification_question = plan.clarification_question
+                self._workflows.save(wf)
                 return self._view(wf)
 
             self._to(wf, WorkflowStatus.VALIDATING)
@@ -170,6 +152,7 @@ class OpsService:
             except OpsAssistantError:
                 self._to(wf, WorkflowStatus.FAILED)
                 self._audit.append(wid, AuditEventType.WORKFLOW_FAILED, actor="policy")
+                self._workflows.save(wf)
                 raise
 
             wf.plan_fingerprint = plan_fingerprint(plan)
@@ -195,6 +178,7 @@ class OpsService:
             wf.steps = [_Step(validated=vs) for vs in validated.steps]
 
             self._run(wf)
+            self._workflows.save(wf)
             return self._view(wf)
 
     def approve(
@@ -216,6 +200,7 @@ class OpsService:
             self._ensure_executing(wf)
             self._execute_step(wf, self._step(wf, approval.step_id))
             self._run(wf)
+            self._workflows.save(wf)
             return self._view(wf)
 
     def reject(
@@ -248,6 +233,7 @@ class OpsService:
                 )
             self._propagate_skips(wf)
             self._to(wf, WorkflowStatus.REJECTED)
+            self._workflows.save(wf)
             return self._view(wf)
 
     def _guard_decision(self, workflow_id: str, approval_id: str) -> _Workflow:
