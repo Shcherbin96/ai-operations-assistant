@@ -72,12 +72,13 @@ that plan is allowed to do.
                  │  Tool gateway   │◄──────────────────────────────────────────┘
                  │ (only validated │
                  │  commands; idem-│──►  Gmail · Calendar · sandbox tools
-                 │  potent; retry) │
+                 │  potent)        │
                  └────────┬────────┘
                           ▼
                  ┌─────────────────┐
-                 │ Append-only     │  every request, plan, source, tool call, argument,
-                 │ audit trail     │  risk tier, approver, result — nothing editable
+                 │ Append-only     │  every request, plan, tool call, resolved arguments
+                 │ audit trail     │  (sensitive values redacted), risk tier, approver,
+                 │                 │  result — appended, never edited
                  └─────────────────┘
 ```
 
@@ -145,12 +146,13 @@ so the project delivers value continuously instead of becoming a never-ending pl
       (drafts, event holds; send / invite only after approval).
 - [x] **Stage 5 — n8n gateway.** Signed webhooks, workflow allowlist, schema validation,
       execution status, audit logging.
-- [x] **Stage 6 — RAG.** Corporate policy retrieval with citations, source snapshots,
-      permission filters.
+- [x] **Stage 6 — RAG.** Corporate-policy retrieval (TF-IDF) that answers with cited
+      sources. (Embeddings/pgvector and permission scoping are documented upgrades.)
 - [x] **Stage 7 — Evals & observability.** Golden dataset, planner evals, scheduled live
-      evals, regression gate, latency / tokens / cost / tool-success dashboards.
-- [x] **Stage 8 — Portfolio packaging.** Architecture diagram, screenshots, demo video,
-      case study, Docker Compose, public demo mode, `v1.0.0` release.
+      evals, regression gate, and audit-derived metrics at `/metrics` (event counts and
+      tool-success rate; latency/token/cost dashboards are a documented upgrade).
+- [x] **Stage 8 — Portfolio packaging.** Architecture diagram, case study, Docker Compose,
+      public demo mode, `v1.0.0` release.
 - [x] **v1.1 — Inter-step data-flow.** A plan step references an earlier step's output with
       `{{step_id.field}}`; the executor resolves it against succeeded steps before running,
       so steps compose into real multi-step workflows instead of isolated actions.
@@ -172,6 +174,9 @@ uv sync                          # create the env (fetches Python 3.12 if needed
 uv run python -m scripts.demo    # walk the three core scenarios end-to-end
 uv run python -m ops_assistant   # serve the API at http://127.0.0.1:8000
 ```
+
+Interactive API docs (Swagger UI) are then at **http://127.0.0.1:8000/docs**
+(and ReDoc at `/redoc`); health at `/healthz`, audit-derived metrics at `/metrics`.
 
 With the server running, submit a request and drive an approval over HTTP:
 
@@ -254,8 +259,8 @@ assistant — you complete the consent yourself.
 ### Development
 
 ```bash
-uv run pytest -v                                   # 122 unit tests (no Docker needed)
-uv run pytest -m integration -o addopts=""         # 10 Postgres tests (needs Docker)
+uv run pytest -v                                   # unit tests (no Docker needed)
+uv run pytest -m integration -o addopts=""         # Postgres integration tests (needs Docker)
 uv run pytest --cov=ops_assistant --cov-report=term-missing
 uv run ruff check . && uv run ruff format --check . && uv run mypy ops_assistant scripts
 ```

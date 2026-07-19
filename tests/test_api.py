@@ -16,6 +16,15 @@ def test_healthz() -> None:
     assert resp.json()["status"] == "ok"
 
 
+def test_openapi_version_is_single_sourced_from_the_package() -> None:
+    # The interactive docs must not announce a stale hardcoded version.
+    from ops_assistant import __version__
+
+    schema = _client().get("/openapi.json").json()
+    assert schema["info"]["version"] == __version__
+    assert __version__ != "0.1.0"
+
+
 def test_metrics_endpoint() -> None:
     client = _client()
     client.post("/requests", json={"text": "find free time", "user": "roman", "source": "web"})

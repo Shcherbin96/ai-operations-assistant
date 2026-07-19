@@ -65,8 +65,9 @@ CI/CD, security engineering — and an honest account of the limits.
 
 ## By the numbers
 
-186 unit tests at 100% coverage, 10 Postgres integration tests, strict mypy,
-ruff, 3-OS CI, and an offline eval gate. Every stage built test-first and
-hardened by an adversarial multi-agent review that found and fixed real defects
-(4 + 6 + 3 + 3 across the stages). Verified live against real Gmail/Calendar and a
-real LLM.
+100% test coverage across the unit suite, plus 10 Postgres integration tests,
+strict mypy, ruff, 3-OS CI, and an offline eval gate. Every stage was built
+test-first and hardened by an adversarial multi-agent review that found and fixed
+real defects — through the v1.3 hardening pass, where the review caught a
+body-redaction gap in the append-only audit before it merged. Verified live
+against real Gmail/Calendar and a real LLM.
