@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ops
+      POSTGRES_PASSWORD: ops
+      POSTGRES_DB: ops
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ops"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    environment:
+      OPS_DATABASE_URL: postgresql://ops:ops@db:5432/ops
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy

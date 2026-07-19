@@ -13,14 +13,14 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: control loop + persistence + Telegram + Gmail/Calendar + LLM planner + RAG — all
-> live.** A plain-language request → an **LLM produces a structured plan** → the server re-derives
-> risk and gates side-effects behind approval → executes → append-only audit. State persists in
-> **Postgres** (a paused workflow survives a restart); a **Telegram bot** drives it end-to-end
-> against real **Gmail/Calendar** (verified live); and a **knowledge base** (`knowledge.search`)
-> answers policy questions with citations. 173 unit tests (100% coverage, strict mypy, 3-OS CI)
-> plus 10 integration tests. Still ahead: packaging + `v1.0.0`. This
-> section always tells the truth about what works.
+> ✅ **Status: `v1.0.0` — all eight stages complete and live.** A plain-language request → an
+> **LLM produces a structured plan** → the server re-derives risk and gates side-effects behind
+> approval → executes → append-only audit. State persists in **Postgres** (a paused workflow
+> survives a restart); a **Telegram bot** drives it end-to-end against real **Gmail/Calendar**
+> (verified live); a **knowledge base** answers policy questions with citations; **n8n** workflows
+> run via signed webhooks; and an **eval gate** plus `/metrics` keep it honest. 186 unit tests
+> (100% coverage, strict mypy, 3-OS CI), 10 Postgres integration tests, and a verified Docker
+> build. This section always tells the truth about what works.
 
 ---
 
@@ -146,7 +146,7 @@ so the project delivers value continuously instead of becoming a never-ending pl
       permission filters.
 - [x] **Stage 7 — Evals & observability.** Golden dataset, planner evals, scheduled live
       evals, regression gate, latency / tokens / cost / tool-success dashboards.
-- [ ] **Stage 8 — Portfolio packaging.** Architecture diagram, screenshots, demo video,
+- [x] **Stage 8 — Portfolio packaging.** Architecture diagram, screenshots, demo video,
       case study, Docker Compose, public demo mode, `v1.0.0` release.
 
 ## Out of scope (v1)
@@ -178,6 +178,12 @@ curl -s -X POST localhost:8000/workflows/<WORKFLOW_ID>/approvals/<APPROVAL_ID>/a
 
 # 3) Read the full append-only audit trail
 curl -s localhost:8000/workflows/<WORKFLOW_ID>/audit
+```
+
+### Run with Docker
+
+```bash
+docker compose up --build   # app on :8000, backed by Postgres
 ```
 
 ### Persistence (optional)
