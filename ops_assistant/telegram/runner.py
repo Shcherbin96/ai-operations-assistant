@@ -3,6 +3,7 @@ update to the bot; ``run_polling`` is the live getUpdates loop."""
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -51,8 +52,12 @@ def run_polling(  # pragma: no cover - live I/O loop
 ) -> None:
     offset: int | None = None
     while should_stop is None or not should_stop():
-        for update in transport.get_updates(offset):
-            update_id = update.get("update_id")
-            if isinstance(update_id, int):
-                offset = update_id + 1
-            dispatch_update(bot, update)
+        try:
+            for update in transport.get_updates(offset):
+                update_id = update.get("update_id")
+                if isinstance(update_id, int):
+                    offset = update_id + 1
+                dispatch_update(bot, update)
+        except Exception as exc:  # keep the bot alive across transient failures
+            print(f"telegram poll error: {type(exc).__name__}: {exc}")
+            time.sleep(3)

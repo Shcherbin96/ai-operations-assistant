@@ -16,11 +16,14 @@ class HttpTelegramTransport:
     def send_message(
         self, chat_id: int, text: str, buttons: list[list[Button]] | None = None
     ) -> None:
-        payload: dict[str, object] = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+        # Plain text on purpose: the body embeds tool/enum names with underscores
+        # (e.g. calendar.find_free_time, external_side_effect), which a Markdown
+        # parse_mode would reject with a 400. No markup, no escaping bugs.
+        payload: dict[str, object] = {"chat_id": chat_id, "text": text}
         keyboard = _keyboard(buttons)
         if keyboard is not None:
             payload["reply_markup"] = keyboard
-        self._client.post(f"{self._base}/sendMessage", json=payload)
+        self._client.post(f"{self._base}/sendMessage", json=payload).raise_for_status()
 
     def edit_message(
         self, chat_id: int, message_id: int, text: str, buttons: list[list[Button]] | None = None
@@ -29,10 +32,9 @@ class HttpTelegramTransport:
             "chat_id": chat_id,
             "message_id": message_id,
             "text": text,
-            "parse_mode": "Markdown",
             "reply_markup": _keyboard(buttons) or {"inline_keyboard": []},
         }
-        self._client.post(f"{self._base}/editMessageText", json=payload)
+        self._client.post(f"{self._base}/editMessageText", json=payload).raise_for_status()
 
     def answer_callback(self, callback_id: str, text: str) -> None:
         self._client.post(
@@ -46,6 +48,7 @@ class HttpTelegramTransport:
             json={"offset": offset, "timeout": timeout},
             timeout=timeout + 10,
         )
+        response.raise_for_status()
         data = response.json()
         result: list[dict[str, object]] = data.get("result", []) if data.get("ok") else []
         return result

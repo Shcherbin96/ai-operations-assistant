@@ -117,7 +117,9 @@ class TelegramBot:
         return not self._allowed or user_id in self._allowed
 
     def _render(self, view: WorkflowView) -> tuple[str, list[list[Button]] | None]:
-        lines = [f"*{view.summary}*" if view.summary else "Request received"]
+        # Plain text (no Markdown): the body contains underscores in tool/enum
+        # names, so any markup parse_mode would 400. See HttpTelegramTransport.
+        lines = [view.summary or "Request received"]
         lines.append(f"Status: {view.status.value}")
 
         if view.requires_clarification and view.clarification_question:

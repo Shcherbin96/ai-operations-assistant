@@ -51,7 +51,6 @@ omit = [
     "ops_assistant/__main__.py",           # server entrypoint, exercised by running
     "ops_assistant/persistence/*",         # covered by the integration suite (needs Postgres)
     "ops_assistant/factory.py",            # Postgres wiring, covered by the integration suite
-    "ops_assistant/telegram/transport.py", # live Bot API I/O, exercised by running
     "ops_assistant/telegram/__main__.py",  # bot entrypoint
 ]
 
