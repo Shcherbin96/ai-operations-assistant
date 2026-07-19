@@ -246,3 +246,26 @@ def test_allowlist_blocks_callback_from_unlisted_user() -> None:
     )
     assert tx.answered and "authorized" in tx.answered[0][1].lower()
     assert not tx.edits
+
+
+def test_rate_limiter_blocks_a_burst_without_calling_the_service() -> None:
+    from ops_assistant.telegram.bot import RATE_LIMITED
+    from ops_assistant.telegram.ratelimit import RateLimiter
+
+    limiter = RateLimiter(max_events=1, window_seconds=60.0, clock=lambda: 0.0)
+    bot, tx = _bot(rate_limiter=limiter)
+    _msg(bot, "find free time")  # first request: served
+    _msg(bot, "find free time")  # second within the window: rate-limited
+    assert "completed" in tx.sent[0].text.lower()
+    assert tx.sent[1].text == RATE_LIMITED
+    assert tx.sent[1].buttons is None
+
+
+def test_rate_limiter_does_not_count_start() -> None:
+    from ops_assistant.telegram.ratelimit import RateLimiter
+
+    limiter = RateLimiter(max_events=1, window_seconds=60.0, clock=lambda: 0.0)
+    bot, tx = _bot(rate_limiter=limiter)
+    _msg(bot, "/start")  # must not consume the budget
+    _msg(bot, "find free time")  # still the first real request -> served
+    assert "completed" in tx.sent[1].text.lower()

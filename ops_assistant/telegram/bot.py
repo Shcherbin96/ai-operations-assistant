@@ -17,6 +17,7 @@ from typing import Protocol
 from ops_assistant.errors import OpsAssistantError
 from ops_assistant.models import StepStatus
 from ops_assistant.service import OpsService, WorkflowView
+from ops_assistant.telegram.ratelimit import RateLimiter
 
 WELCOME = (
     "👋 I'm your AI Operations Assistant.\n\n"
@@ -27,6 +28,8 @@ WELCOME = (
     "I'll plan it, run what's safe, and ask you to approve anything that leaves "
     "the building. Nothing external happens without your tap."
 )
+
+RATE_LIMITED = "⏳ You're going a bit fast for the demo. Give it a few seconds and try again."
 
 _STATUS_EMOJI: dict[StepStatus, str] = {
     StepStatus.SUCCEEDED: "✅",
@@ -94,10 +97,12 @@ class TelegramBot:
         service: OpsService,
         transport: TelegramTransport,
         allowed_users: frozenset[int] | None = None,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         self._svc = service
         self._tx = transport
         self._allowed = allowed_users or frozenset()
+        self._limiter = rate_limiter
 
     def handle_message(self, *, chat_id: int, user_id: int, user_name: str, text: str) -> None:
         if not self._authorized(user_id):
@@ -105,6 +110,10 @@ class TelegramBot:
             return
         if text.strip() == "/start":
             self._tx.send_message(chat_id, WELCOME)
+            return
+        # Rate-limit only real requests (they hit the planner/LLM); /start is free.
+        if self._limiter is not None and not self._limiter.allow(user_id):
+            self._tx.send_message(chat_id, RATE_LIMITED)
             return
         view = self._svc.submit(text=text, user=user_name, source="telegram")
         body, buttons = self._render(view)

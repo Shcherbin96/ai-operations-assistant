@@ -1,0 +1,33 @@
+# fly.toml — always-on public demo bot for AI Operations Assistant.
+#
+# Runs the Telegram bot as a single long-polling worker (no HTTP service). It is
+# deliberately a SANDBOX deployment: OPS_GOOGLE_CLIENT_SECRETS is never set here,
+# so the Gmail/Calendar tools fall back to keyless mocks — the public demo cannot
+# touch a real inbox. The LLM planner and all secrets are supplied via
+# `fly secrets set` (see DEPLOY.md); nothing secret lives in this committed file.
+#
+# `app` is a placeholder — pick a globally-unique name during `fly launch`.
+app = "ai-ops-assistant-demo"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Non-secret runtime config only. Secrets go through `fly secrets set`.
+[env]
+  # Public-demo abuse guard: 5 requests per user per 60s (see ratelimit.py).
+  # First-line only — the hard budget backstop is a provider-side spend cap.
+  OPS_TELEGRAM_RATE_LIMIT = "5"
+  OPS_TELEGRAM_RATE_WINDOW_SECONDS = "60"
+  OPS_KNOWLEDGE_DIR = "knowledge_base"
+
+# One worker process: the long-polling bot. No [[services]] / [http_service],
+# so Fly does not auto-stop the machine — the poller stays up 24/7. If the
+# process crashes, Fly restarts it (and run_polling already backs off on blips).
+[processes]
+  bot = "uv run --no-sync python -m ops_assistant.telegram"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  processes = ["bot"]

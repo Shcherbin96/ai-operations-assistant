@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.0 — 2026-07-19
+
+### Added
+
+- **Always-on deployment for a public demo bot.** `fly.toml` runs the Telegram
+  bot as a single always-on long-polling worker on Fly.io, and `DEPLOY.md` is the
+  ordered, safety-first checklist. The demo is **sandbox-only** by construction
+  (no `OPS_GOOGLE_CLIENT_SECRETS` → the Gmail/Calendar tools stay keyless mocks),
+  so a stranger can try the full plan→approve→audit loop without any real inbox
+  being reachable.
+- **Per-user rate limiting** (`telegram/ratelimit.py`) — a sliding-window limiter
+  guards the open demo's LLM budget (`OPS_TELEGRAM_RATE_LIMIT` requests per
+  `OPS_TELEGRAM_RATE_WINDOW_SECONDS`, `0` = off). It gates only real requests, not
+  `/start`, and its memory stays bounded to recently-active users. First-line
+  defence only; the hard backstop is a provider-side spend cap (documented).
+
+### Notes
+
+- The demo bot must use a **separate** BotFather token from the private live bot
+  (Telegram allows one long-poller per token) and the OpenRouter key should be
+  rotated + capped before going public — see `DEPLOY.md`.
+
 ## 1.1.0 — 2026-07-19
 
 ### Added
