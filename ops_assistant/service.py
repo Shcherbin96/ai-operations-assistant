@@ -14,7 +14,6 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,7 +32,11 @@ from ops_assistant.models import (
 )
 from ops_assistant.planner.base import Planner
 from ops_assistant.planner.demo import DemoPlanner
-from ops_assistant.policy import ApprovalDecision, PolicyConfig, PolicyEngine, ValidatedStep
+from ops_assistant.policy import ApprovalDecision, PolicyConfig, PolicyEngine
+from ops_assistant.state import StepRecord as _Step
+from ops_assistant.state import WorkflowRecord as _Workflow
+from ops_assistant.state import is_empty as _is_empty
+from ops_assistant.store import InMemoryWorkflowStore, WorkflowStore
 from ops_assistant.tools.registry import ToolRegistry
 from ops_assistant.tools.sandbox import build_sandbox_registry
 from ops_assistant.workflow import assert_step_transition, assert_workflow_transition
@@ -84,34 +87,6 @@ class WorkflowView(BaseModel):
     pending_approvals: list[ApprovalView]
 
 
-# --- Internal mutable state. ---
-
-
-@dataclass
-class _Step:
-    validated: ValidatedStep
-    status: StepStatus = StepStatus.PENDING
-    output: object | None = None
-    approval_id: str | None = None
-    error: str | None = None
-
-
-@dataclass
-class _Workflow:
-    id: str
-    request: OperationRequest
-    status: WorkflowStatus
-    summary: str = ""
-    requires_clarification: bool = False
-    clarification_question: str | None = None
-    plan_fingerprint: str = ""
-    steps: list[_Step] = field(default_factory=list)
-
-
-def _is_empty(output: object) -> bool:
-    return output is None or (isinstance(output, (list, tuple, dict, str)) and len(output) == 0)
-
-
 class OpsService:
     def __init__(
         self,
@@ -121,6 +96,7 @@ class OpsService:
         clock: Callable[[], datetime] = _utcnow,
         id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
         approval_ttl: timedelta = timedelta(hours=1),
+        store: WorkflowStore | None = None,
     ) -> None:
         self._planner = planner or DemoPlanner()
         self._registry = registry or build_sandbox_registry()
@@ -130,7 +106,7 @@ class OpsService:
         self._gateway = ToolGateway(self._registry, self._audit)
         self._id_factory = id_factory
         self._ttl = approval_ttl
-        self._workflows: dict[str, _Workflow] = {}
+        self._workflows: WorkflowStore = store or InMemoryWorkflowStore()
         # Sync endpoints run in a threadpool; serialize state mutations so the
         # check-then-act sequences (approval single-use, gateway idempotency,
         # state transitions) are atomic. Stage 2 replaces this with DB row locks
@@ -144,7 +120,7 @@ class OpsService:
             wid = self._id_factory()
             request = OperationRequest(id=wid, text=text, user=user, source=source)
             wf = _Workflow(id=wid, request=request, status=WorkflowStatus.CREATED)
-            self._workflows[wid] = wf
+            self._workflows.create(wf)
             self._audit.append(
                 wid, AuditEventType.REQUEST_CREATED, actor=user, payload={"source": source}
             )
@@ -195,6 +171,7 @@ class OpsService:
             wf.steps = [_Step(validated=vs) for vs in validated.steps]
 
             self._run(wf)
+            self._workflows.save(wf)
             return self._view(wf)
 
     def approve(
@@ -216,6 +193,7 @@ class OpsService:
             self._ensure_executing(wf)
             self._execute_step(wf, self._step(wf, approval.step_id))
             self._run(wf)
+            self._workflows.save(wf)
             return self._view(wf)
 
     def reject(
@@ -248,6 +226,7 @@ class OpsService:
                 )
             self._propagate_skips(wf)
             self._to(wf, WorkflowStatus.REJECTED)
+            self._workflows.save(wf)
             return self._view(wf)
 
     def _guard_decision(self, workflow_id: str, approval_id: str) -> _Workflow:
