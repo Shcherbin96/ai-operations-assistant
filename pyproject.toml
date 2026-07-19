@@ -6,6 +6,9 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "fastapi>=0.115",       # API layer
+    "google-api-python-client>=2.100",
+    "google-auth>=2.30",
+    "google-auth-oauthlib>=1.2",
     "httpx>=0.27",          # Telegram Bot API client
     "psycopg[binary]>=3.2",
     "pydantic>=2.9",        # strict data contracts everywhere
@@ -39,6 +42,17 @@ python_version = "3.12"
 strict = true
 files = ["ops_assistant", "scripts"]
 
+[[tool.mypy.overrides]]
+module = ["googleapiclient.*", "google_auth_oauthlib.*", "google.auth.*", "google.oauth2.*"]
+ignore_missing_imports = true
+
+# The Google SDK adapters wrap partially-typed third-party calls; relax the two
+# strict checks that clash with it, only for these I/O modules.
+[[tool.mypy.overrides]]
+module = ["ops_assistant.gworkspace.auth", "ops_assistant.gworkspace.live"]
+disallow_untyped_calls = false
+warn_return_any = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not integration'"
@@ -52,6 +66,9 @@ omit = [
     "ops_assistant/persistence/*",         # covered by the integration suite (needs Postgres)
     "ops_assistant/factory.py",            # Postgres wiring, covered by the integration suite
     "ops_assistant/telegram/__main__.py",  # bot entrypoint
+    "ops_assistant/gworkspace/auth.py",    # Google OAuth I/O
+    "ops_assistant/gworkspace/live.py",    # live Gmail/Calendar API I/O
+    "ops_assistant/gworkspace/__main__.py",  # auth entrypoint
 ]
 
 [tool.coverage.report]

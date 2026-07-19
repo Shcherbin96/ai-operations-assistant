@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     telegram_token: str | None = None
     # Optional allowlist of Telegram user ids (comma-separated). Empty -> open (demo).
     telegram_allowed_users: str = ""
+    # Google OAuth (Stage 4). Unset -> Gmail/Calendar tools fall back to the sandbox.
+    google_client_secrets: str | None = None
+    google_token_path: str = "token.json"
 
 
 @lru_cache
