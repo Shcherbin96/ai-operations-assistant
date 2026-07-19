@@ -62,3 +62,11 @@ jobs:
       - run: uv sync --locked
       - name: Integration tests (Postgres via testcontainers)
         run: uv run pytest -m integration -o addopts="" -v
+
+  docker:
+    # Build-only: proves the image assembles from the same lockfile CI verifies.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: docker build -t ai-ops-assistant:ci .
