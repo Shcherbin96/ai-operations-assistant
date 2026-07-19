@@ -273,21 +273,56 @@ def test_reference_without_a_declared_dependency_is_refused() -> None:
         svc.submit(text="reply", user="roman", source="test")
 
 
-def test_redact_for_audit_keeps_forensics_but_truncates_and_redacts() -> None:
+def test_redact_for_audit_keeps_forensics_and_literals_but_summarizes_referenced_data() -> None:
     from ops_assistant.service import _redact_for_audit
 
-    out = _redact_for_audit({"to": "a@b.c", "body": "secret note", "note": "x" * 300})
-    assert out["to"] == "a@b.c"  # forensic field kept verbatim
-    assert out["body"] == "<redacted 11 chars>"  # body never stored verbatim
-    assert out["note"].endswith("chars)") and len(out["note"]) < 300  # long value capped
+    template = {
+        "to": "{{s1.from}}",  # reference into a routing field -> kept (forensic)
+        "subject": "Weekly report",  # literal plan text -> kept
+        "context": "{{s1.body}}",  # a body routed into a renamed key -> summarized
+        "body": "{{s1}}",  # whole-output nested dict under a body key -> summarized
+        "count": 5,  # literal scalar -> kept
+        "cc": ["a@b.c", "d@e.f"],  # literal structured value -> shape only
+    }
+    resolved = {
+        "to": "anna@example.com",
+        "subject": "Weekly report",
+        "context": "Hi, quick question about my order.",  # short body, not a body-key
+        "body": {"from": "a@b.c", "body": "secret full text"},
+        "count": 5,
+        "cc": ["a@b.c", "d@e.f"],
+    }
+    out = _redact_for_audit(template, resolved)
+    assert out["to"] == "anna@example.com"  # recipient recorded (the forensic point)
+    assert out["subject"] == "Weekly report"  # literal kept
+    assert out["count"] == 5
+    assert out["cc"] == {"redacted_items": 2}  # structured value never dumped verbatim
+    assert out["context"].startswith("<redacted")  # reference-derived body-ish -> summarized
+    assert out["body"] == {"redacted_keys": ["body", "from"]}  # nested body never stored
+    # No sensitive text survives anywhere in the payload:
+    assert "secret full text" not in str(out)
+    assert "Hi, quick question about my order." not in str(out)
+
+
+def test_redact_for_audit_never_dumps_a_body_by_type() -> None:
+    from ops_assistant.service import _redact_for_audit
+
+    template = {"body": ["a", "b"], "html": "{{s1.n}}"}
+    resolved = {"body": ["line one", "line two"], "html": 7}
+    out = _redact_for_audit(template, resolved)
+    assert out["body"] == {"redacted_items": 2}  # list body -> shape only
+    assert out["html"] == 7  # non-string under a body key -> harmless scalar
+    assert "line one" not in str(out)
 
 
 def test_result_digest_summarizes_each_shape() -> None:
     from ops_assistant.service import _result_digest
 
     assert _result_digest([1, 2, 3]) == {"count": 3}  # lists -> just a count
-    assert _result_digest({"message_id": "m1", "body": "hi"})["body"].startswith("<redacted")
-    assert _result_digest("x" * 300).endswith("…")  # long scalar truncated
+    got = _result_digest({"message_id": "m1", "from": "a@b.c", "body": "secret"})
+    assert got["message_id"] == "m1" and got["from"] == "a@b.c"  # forensics kept
+    assert got["body"].startswith("<redacted") and "secret" not in str(got)  # body redacted
+    assert str(_result_digest("x" * 300)).endswith("chars)")  # long scalar capped
     assert _result_digest("ok") == "ok"  # short scalar passes through
 
 

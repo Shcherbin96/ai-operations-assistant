@@ -48,25 +48,52 @@ def _utcnow() -> datetime:
 
 
 # --- Audit redaction ---------------------------------------------------------
-# The audit trail is append-only: a row written here can never be scrubbed. So we
-# record the *forensic* fields (recipient, subject, ids) — enough to answer "who
-# did this send actually go to?" — but never persist a full message body, and cap
-# any long value. The Telegram approval preview uses a separate, non-redacting
-# formatter, because informed consent means the human must see the real body.
+# The audit trail is append-only: a row written here can never be scrubbed, so it
+# errs toward revealing less. It records the *forensic* fields — enough to answer
+# "who did this send actually go to?" — while never persisting a message body.
+#
+# Sensitivity follows *provenance*: an argument whose value was substituted from a
+# ``{{step.field}}`` reference carries tool output (an email, a document) and is
+# reduced to a shape summary — except routing fields (the recipient IS the point).
+# A literal, plan-authored value is the model's own text and is kept (capped).
+# Body-like keys are always redacted, at any type. The Telegram approval preview
+# uses a separate, non-redacting formatter: informed consent needs the real body.
 
-_AUDIT_REDACT_KEYS = frozenset({"body", "text", "html", "content"})
+_ALWAYS_REDACT_KEYS = frozenset({"body", "text", "html", "content"})
+_ROUTING_KEYS = frozenset({"to", "cc", "bcc", "recipient", "recipients"})
 _MAX_AUDIT_STR = 200
 
 
-def _redact_for_audit(arguments: Mapping[str, object]) -> dict[str, object]:
+def _summarize(value: object) -> object:
+    """A shape-only marker that reveals no content."""
+    if isinstance(value, str):
+        return f"<redacted {len(value)} chars>"
+    if isinstance(value, Mapping):
+        return {"redacted_keys": sorted(str(k) for k in value)}
+    if isinstance(value, (list, tuple)):
+        return {"redacted_items": len(value)}
+    return value
+
+
+def _cap(value: object) -> object:
+    """Keep a scalar (capping a long string); never dump a nested structure."""
+    if isinstance(value, str) and len(value) > _MAX_AUDIT_STR:
+        return value[:_MAX_AUDIT_STR] + f"… (+{len(value) - _MAX_AUDIT_STR} chars)"
+    if isinstance(value, (Mapping, list, tuple)):
+        return _summarize(value)
+    return value
+
+
+def _redact_for_audit(
+    template: Mapping[str, object], resolved: Mapping[str, object]
+) -> dict[str, object]:
+    """Redact ``resolved`` arguments for the immutable log, using ``template`` to
+    tell reference-substituted (sensitive) values from literal plan text."""
     redacted: dict[str, object] = {}
-    for key, value in arguments.items():
-        if key in _AUDIT_REDACT_KEYS and isinstance(value, str):
-            redacted[key] = f"<redacted {len(value)} chars>"
-        elif isinstance(value, str) and len(value) > _MAX_AUDIT_STR:
-            redacted[key] = value[:_MAX_AUDIT_STR] + f"… (+{len(value) - _MAX_AUDIT_STR} chars)"
-        else:
-            redacted[key] = value
+    for key, value in resolved.items():
+        substituted = template.get(key) != value
+        sensitive = key in _ALWAYS_REDACT_KEYS or (substituted and key not in _ROUTING_KEYS)
+        redacted[key] = _summarize(value) if sensitive else _cap(value)
     return redacted
 
 
@@ -75,10 +102,11 @@ def _result_digest(output: object) -> object:
     if isinstance(output, list):
         return {"count": len(output)}
     if isinstance(output, Mapping):
-        return _redact_for_audit(output)
-    if isinstance(output, str) and len(output) > _MAX_AUDIT_STR:
-        return output[:_MAX_AUDIT_STR] + "…"
-    return output
+        return {
+            str(key): (_summarize(value) if key in _ALWAYS_REDACT_KEYS else _cap(value))
+            for key, value in output.items()
+        }
+    return _cap(output)
 
 
 # --- Views: the read models handed back to callers and the API. ---
@@ -393,7 +421,10 @@ class OpsService:
             AuditEventType.STEP_STARTED,
             actor="executor",
             step_id=step.validated.id,
-            payload={"tool": step.validated.tool, "arguments": _redact_for_audit(arguments)},
+            payload={
+                "tool": step.validated.tool,
+                "arguments": _redact_for_audit(step.validated.arguments, arguments),
+            },
         )
         try:
             result = self._gateway.execute(
@@ -453,7 +484,7 @@ class OpsService:
                 "tool": step.validated.tool,
                 "approval_id": approval.id,
                 "risk": step.validated.resolved_risk.value,
-                "arguments": _redact_for_audit(arguments),
+                "arguments": _redact_for_audit(step.validated.arguments, arguments),
             },
         )
 

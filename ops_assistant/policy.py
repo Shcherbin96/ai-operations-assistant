@@ -94,15 +94,17 @@ class PolicyEngine:
             for dep in step.depends_on:
                 if dep not in known_ids:
                     raise PlanValidationError(f"step {step.id} depends on unknown step '{dep}'")
-            # A ``{{step.field}}`` reference may only point at a declared dependency.
-            # This keeps approval-time resolution identical to execution-time
-            # resolution (both draw on the same already-succeeded deps), so the
-            # approver always sees the value that will actually run — and it blocks
-            # an adversarial plan from pulling a value out of an undeclared step
-            # that the approval preview never resolved.
+            # A ``{{step.field}}`` reference to *another step* may only point at a
+            # declared dependency. This keeps approval-time resolution identical to
+            # execution-time resolution (both draw on the same already-succeeded
+            # deps), so the approver always sees the value that will actually run —
+            # and it blocks an adversarial plan from pulling a value out of an
+            # undeclared step the approval preview never resolved. A token that
+            # names no step (e.g. a mail-merge ``{{name}}``) is not a data-flow
+            # reference — the resolver leaves it literal — so it is left alone.
             declared = set(step.depends_on)
             for ref in referenced_steps(step.arguments):
-                if ref not in declared:
+                if ref in known_ids and ref not in declared:
                     raise PlanValidationError(
                         f"step {step.id} references step '{ref}' without declaring it in depends_on"
                     )

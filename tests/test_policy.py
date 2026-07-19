@@ -202,3 +202,20 @@ def test_reference_to_a_declared_dependency_is_accepted() -> None:
         ],
     )
     assert [s.tool for s in _engine().validate(plan).steps] == ["email.search", "email.send"]
+
+
+def test_literal_template_token_that_names_no_step_is_allowed() -> None:
+    # A mail-merge placeholder like {{name}} names no step, so it is not a
+    # data-flow reference — the resolver leaves it literal. Policy must not reject
+    # a plan just because an argument contains template braces.
+    plan = Plan(
+        summary="send",
+        steps=[
+            PlanStep(
+                id="s1",
+                tool="email.send",
+                arguments={"to": "anna@example.com", "body": "Hi {{name}}, your code is ready"},
+            )
+        ],
+    )
+    assert _engine().validate(plan).steps[0].tool == "email.send"
