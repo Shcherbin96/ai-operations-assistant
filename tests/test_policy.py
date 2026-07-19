@@ -219,3 +219,47 @@ def test_literal_template_token_that_names_no_step_is_allowed() -> None:
         ],
     )
     assert _engine().validate(plan).steps[0].tool == "email.send"
+
+
+# --- the crown-jewel invariant, over the WHOLE registry (not one example) ---
+
+_TIER_ORDER = [
+    RiskTier.READ_ONLY,
+    RiskTier.DRAFT,
+    RiskTier.WRITE,
+    RiskTier.EXTERNAL_SIDE_EFFECT,
+    RiskTier.DESTRUCTIVE,
+]
+
+
+def test_server_owns_risk_for_every_tool_and_every_claim() -> None:
+    # Property: for every registered tool, resolved risk == the registry's tier and
+    # the auto/approval decision is a pure function of it — no claimed_risk (matching,
+    # one lower, one higher, or absent) can move either. This pins the "the model
+    # cannot lower risk" guarantee against future tool additions, not just email.send.
+    registry = build_sandbox_registry()
+    config = PolicyConfig()
+    engine = PolicyEngine(registry, config)
+    for name in registry.names():
+        spec = registry.require(name)
+        args = dict.fromkeys(spec.required_args, "x")
+        idx = _TIER_ORDER.index(spec.risk)
+        claims = {
+            None,
+            spec.risk,
+            _TIER_ORDER[max(0, idx - 1)],
+            _TIER_ORDER[min(len(_TIER_ORDER) - 1, idx + 1)],
+        }
+        for claim in claims:
+            plan = Plan(
+                summary="x",
+                steps=[PlanStep(id="s1", tool=name, arguments=args, claimed_risk=claim)],
+            )
+            if spec.risk in config.disabled_tiers:
+                with pytest.raises(PolicyError):  # disabled tiers are refused outright
+                    engine.validate(plan)
+                continue
+            step = engine.validate(plan).steps[0]
+            assert step.resolved_risk == spec.risk  # server's truth, never the claim
+            assert step.decision is config.decide(spec.risk)  # decision ignores the claim
+            assert step.risk_mismatch == (claim is not None and claim != spec.risk)

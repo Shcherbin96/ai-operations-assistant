@@ -59,7 +59,9 @@ class FakeCalendar:
         end: str | None = None,
         attendees: list[str] | None = None,
     ) -> dict[str, object]:
-        self.calls.append(("create_event", {"title": title}))
+        self.calls.append(
+            ("create_event", {"title": title, "start": start, "end": end, "attendees": attendees})
+        )
         return {"event_id": "e-new", "title": title}
 
     def delete_event(self, *, event_id: str) -> dict[str, object]:
@@ -133,6 +135,29 @@ def test_create_event_requires_title() -> None:
     reg, _, _ = _registry()
     with pytest.raises(ArgumentError):
         reg.require("calendar.create_event").handler({})
+
+
+def test_create_event_forwards_start_end_and_attendees() -> None:
+    # The tool must not silently drop the schedule/invitees: the human approves an
+    # event with a time and guests, so those must reach the client.
+    reg, _, calendar = _registry()
+    reg.require("calendar.create_event").handler(
+        {
+            "title": "Sync",
+            "start": "2026-07-20T15:00",
+            "end": "2026-07-20T15:30",
+            "attendees": ["a@b.c", "d@e.f"],
+        }
+    )
+    assert calendar.calls[-1] == (
+        "create_event",
+        {
+            "title": "Sync",
+            "start": "2026-07-20T15:00",
+            "end": "2026-07-20T15:30",
+            "attendees": ["a@b.c", "d@e.f"],
+        },
+    )
 
 
 def test_delete_event_delegates_and_requires_id() -> None:
