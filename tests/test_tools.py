@@ -71,6 +71,19 @@ def test_sandbox_email_search_returns_messages() -> None:
     assert result, "sandbox search should return at least one fake message"
 
 
+def test_sandbox_create_event_echoes_schedule_and_attendees() -> None:
+    # Parity with the live client: the schedule/invitees the human approves are
+    # reflected in the result, not silently dropped.
+    out = (
+        build_sandbox_registry()
+        .require("calendar.create_event")
+        .handler({"title": "Sync", "start": "2026-07-20T15:00", "attendees": ["a@b.c"]})
+    )
+    assert out["start"] == "2026-07-20T15:00"
+    assert out["attendees"] == ["a@b.c"]
+    assert "end" not in out  # only echoes what was provided
+
+
 def test_sandbox_handlers_return_shaped_data() -> None:
     reg = build_sandbox_registry()
     assert isinstance(reg.require("calendar.list_events").handler({}), list)

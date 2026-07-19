@@ -4,8 +4,16 @@ A plan step can reference an earlier step's output with ``{{step_id.field}}``
 (dotted paths, array indices, and whole-output ``{{step_id}}`` are allowed). Before
 a step runs, the executor resolves these against the outputs of the steps that
 already succeeded — so a draft goes to the *actual* sender found by the search
-step, not a placeholder. Unresolvable references are left literal (never silently
-wrong).
+step, not a placeholder.
+
+Resolution is deliberately lenient about the *shape* a model guesses: when the
+exact path misses, it falls back to the referenced leaf field on the first result
+object, so ``{{s1.results[0].from}}`` still finds ``from`` (see ``_lookup``). The
+trade-off — pinned by tests — is that a mistaken path whose leaf name happens to
+exist elsewhere resolves to that value instead of failing. A reference that
+resolves to nothing is left literal, never blanked. Two things bound the risk: the
+policy engine requires every reference to name a declared, already-succeeded
+dependency, and a human approves the *resolved* arguments before any side-effect.
 """
 
 from __future__ import annotations

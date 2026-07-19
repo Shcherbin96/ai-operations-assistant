@@ -105,7 +105,13 @@ def _calendar_find_free_time(args: Mapping[str, object]) -> object:
 
 def _calendar_create_event(args: Mapping[str, object]) -> object:
     title = str(_require(args, "title"))
-    return {"event_id": f"evt-{title}", "title": title, "status": "created"}
+    event: dict[str, object] = {"event_id": f"evt-{title}", "title": title, "status": "created"}
+    # Echo the scheduling fields the tool accepts, so the plan/approval reflect
+    # what will actually be created (mirrors the live client, which forwards them).
+    for key in ("start", "end", "attendees"):
+        if key in args:
+            event[key] = args[key]
+    return event
 
 
 def _calendar_delete_event(args: Mapping[str, object]) -> object:

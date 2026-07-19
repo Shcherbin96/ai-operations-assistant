@@ -1,5 +1,7 @@
 """Inter-step data-flow: resolve {{step.field}} references from earlier outputs."""
 
+import pytest
+
 from ops_assistant.dataflow import referenced_steps, resolve_references
 
 
@@ -65,3 +67,31 @@ def test_referenced_steps_finds_every_id_across_nested_structures() -> None:
 
 def test_referenced_steps_is_empty_without_references() -> None:
     assert referenced_steps({"to": "anna@example.com", "n": 5, "list": ["a", 1]}) == set()
+
+
+def test_leaf_fallback_resolves_a_mispathed_reference_to_the_leaf_name() -> None:
+    # Documented trade-off (not a silent surprise): when the exact path misses, the
+    # resolver falls back to the leaf field on the first result. Here 'attachments'
+    # does not exist but a top-level 'sender' does, so it resolves to that. This is
+    # intentional (it forgives model-guessed wrappers) and is pinned here.
+    outputs = {"s1": {"sender": "top@x.com"}}
+    resolved = resolve_references({"to": "{{s1.attachments[0].sender}}"}, outputs)
+    assert resolved == {"to": "top@x.com"}
+
+
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        {},
+        {"s1": None},
+        {"s1": []},
+        {"s1": [[]]},
+        {"s1": {"a": {"b": [1, {"c": 2}]}}},
+        {"s1": [{"x": [None]}]},
+    ],
+)
+def test_resolver_never_raises_on_arbitrary_output_shapes(outputs: dict[str, object]) -> None:
+    # resolve_references runs on untrusted, model-shaped upstream output before every
+    # gated execution — it must never raise, whatever the shape.
+    args = {"a": "{{s1}}", "b": "{{s1.x.y.z}}", "c": ["{{s1[0].q}}", {"d": "{{s1.a.b[9].c}}"}]}
+    resolve_references(args, outputs)

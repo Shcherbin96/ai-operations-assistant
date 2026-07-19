@@ -17,6 +17,11 @@ def _require(args: Mapping[str, object], key: str) -> object:
     return args[key]
 
 
+def _optional_str(args: Mapping[str, object], key: str) -> str | None:
+    value = args.get(key)
+    return None if value is None else str(value)
+
+
 def build_google_registry(gmail: GmailClient, calendar: CalendarClient) -> ToolRegistry:
     def email_search(args: Mapping[str, object]) -> object:
         return gmail.search(str(args.get("query", "")))
@@ -47,7 +52,13 @@ def build_google_registry(gmail: GmailClient, calendar: CalendarClient) -> ToolR
         return calendar.find_free_time(duration_minutes=minutes)
 
     def calendar_create_event(args: Mapping[str, object]) -> object:
-        return calendar.create_event(title=str(_require(args, "title")))
+        attendees = args.get("attendees")
+        return calendar.create_event(
+            title=str(_require(args, "title")),
+            start=_optional_str(args, "start"),
+            end=_optional_str(args, "end"),
+            attendees=[str(a) for a in attendees] if isinstance(attendees, list) else None,
+        )
 
     def calendar_delete_event(args: Mapping[str, object]) -> object:
         return calendar.delete_event(event_id=str(_require(args, "id")))
