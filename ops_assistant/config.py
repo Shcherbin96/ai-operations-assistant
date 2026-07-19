@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # every registered tool is permitted. A plan using a tool outside the list is
     # refused by the policy engine.
     allowed_tools: str = ""
+    # Optional bearer token for the HTTP API. Unset -> the API is open (demo). Set ->
+    # the state-changing endpoints require `Authorization: Bearer <api_key>`.
+    api_key: str | None = None
     # Postgres DSN. Unset -> the app runs fully in-memory (keyless demo).
     database_url: str | None = None
     # Telegram bot token (from @BotFather). Unset -> the Telegram bot is disabled.

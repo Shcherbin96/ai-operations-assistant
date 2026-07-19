@@ -16,6 +16,26 @@ def test_healthz() -> None:
     assert resp.json()["status"] == "ok"
 
 
+def test_api_is_open_when_no_key_configured() -> None:
+    resp = _client().post("/requests", json={"text": "find free time", "user": "u"})
+    assert resp.status_code == 201
+
+
+def test_api_requires_bearer_token_when_key_is_configured() -> None:
+    client = TestClient(create_app(OpsService(), api_key="s3cret"))
+    body = {"text": "find free time", "user": "u"}
+    # no header -> 401
+    assert client.post("/requests", json=body).status_code == 401
+    # wrong key -> 401
+    wrong = client.post("/requests", json=body, headers={"Authorization": "Bearer nope"})
+    assert wrong.status_code == 401
+    # correct key -> 201
+    ok = client.post("/requests", json=body, headers={"Authorization": "Bearer s3cret"})
+    assert ok.status_code == 201
+    # health check stays open for platform probes
+    assert client.get("/healthz").status_code == 200
+
+
 def test_openapi_version_is_single_sourced_from_the_package() -> None:
     # The interactive docs must not announce a stale hardcoded version.
     from ops_assistant import __version__
