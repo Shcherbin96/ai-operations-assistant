@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from typing import Any
 
+from ops_assistant.gworkspace.freebusy import busy_intervals, free_slots
 from ops_assistant.gworkspace.tools import build_google_registry
 from ops_assistant.tools.registry import ToolRegistry
 
@@ -29,7 +30,8 @@ def _plain_text(payload: dict[str, Any]) -> str:
     if payload.get("mimeType") == "text/plain":
         data = payload.get("body", {}).get("data")
         if data:
-            return base64.urlsafe_b64decode(data).decode(errors="replace")
+            padded = data + "=" * (-len(data) % 4)  # tolerate unpadded base64url
+            return base64.urlsafe_b64decode(padded).decode(errors="replace")
     for part in payload.get("parts", []) or []:
         text = _plain_text(part)
         if text:
@@ -138,21 +140,8 @@ class GoogleCalendarClient:
             )
             .execute()
         )
-        busy: list[tuple[datetime, datetime]] = []
-        for e in resp.get("items", []):
-            start, end = e["start"].get("dateTime"), e["end"].get("dateTime")
-            if start and end:
-                busy.append((datetime.fromisoformat(start), datetime.fromisoformat(end)))
-
-        slots: list[dict[str, object]] = []
-        cursor = now
-        for start, end in busy:
-            if (start - cursor) >= timedelta(minutes=duration_minutes):
-                slots.append({"start": cursor.isoformat(), "end": start.isoformat()})
-            cursor = max(cursor, end)
-        if (horizon - cursor) >= timedelta(minutes=duration_minutes):
-            slots.append({"start": cursor.isoformat(), "end": horizon.isoformat()})
-        return slots[:5]
+        busy = busy_intervals(resp.get("items", []))
+        return free_slots(busy, now, horizon, duration_minutes)[:5]
 
     def create_event(
         self,
@@ -173,6 +162,10 @@ class GoogleCalendarClient:
             body["attendees"] = [{"email": a} for a in attendees]
         event = self._s.events().insert(calendarId="primary", body=body).execute()
         return {"event_id": event["id"], "title": title, "status": "created"}
+
+    def delete_event(self, *, event_id: str) -> dict[str, object]:
+        self._s.events().delete(calendarId="primary", eventId=event_id).execute()
+        return {"deleted": event_id}
 
 
 def build_live_registry(credentials: Any) -> ToolRegistry:

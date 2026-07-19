@@ -62,6 +62,10 @@ class FakeCalendar:
         self.calls.append(("create_event", {"title": title}))
         return {"event_id": "e-new", "title": title}
 
+    def delete_event(self, *, event_id: str) -> dict[str, object]:
+        self.calls.append(("delete_event", {"event_id": event_id}))
+        return {"deleted": event_id}
+
 
 def _registry() -> tuple[Any, FakeGmail, FakeCalendar]:
     gmail, calendar = FakeGmail(), FakeCalendar()
@@ -76,6 +80,7 @@ SHARED_TOOLS = [
     "calendar.list_events",
     "calendar.find_free_time",
     "calendar.create_event",
+    "calendar.delete_event",
 ]
 
 
@@ -128,3 +133,11 @@ def test_create_event_requires_title() -> None:
     reg, _, _ = _registry()
     with pytest.raises(ArgumentError):
         reg.require("calendar.create_event").handler({})
+
+
+def test_delete_event_delegates_and_requires_id() -> None:
+    reg, _, calendar = _registry()
+    assert reg.require("calendar.delete_event").handler({"id": "e1"})["deleted"] == "e1"
+    assert calendar.calls[-1] == ("delete_event", {"event_id": "e1"})
+    with pytest.raises(ArgumentError):
+        reg.require("calendar.delete_event").handler({})

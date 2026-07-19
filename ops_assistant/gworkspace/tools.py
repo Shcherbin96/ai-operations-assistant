@@ -49,6 +49,9 @@ def build_google_registry(gmail: GmailClient, calendar: CalendarClient) -> ToolR
     def calendar_create_event(args: Mapping[str, object]) -> object:
         return calendar.create_event(title=str(_require(args, "title")))
 
+    def calendar_delete_event(args: Mapping[str, object]) -> object:
+        return calendar.delete_event(event_id=str(_require(args, "id")))
+
     specs = (
         ToolSpec("email.search", RiskTier.READ_ONLY, "Search the mailbox", email_search),
         ToolSpec("email.get", RiskTier.READ_ONLY, "Read one message", email_get, ("id",)),
@@ -73,6 +76,13 @@ def build_google_registry(gmail: GmailClient, calendar: CalendarClient) -> ToolR
             "Create an event (invites attendees)",
             calendar_create_event,
             ("title",),
+        ),
+        ToolSpec(
+            "calendar.delete_event",
+            RiskTier.DESTRUCTIVE,
+            "Delete an event",
+            calendar_delete_event,
+            ("id",),
         ),
     )
 
