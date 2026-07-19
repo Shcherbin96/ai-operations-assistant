@@ -8,6 +8,9 @@ Three properties matter here and each is a test:
 * **Plan-bound** — an approval carries the fingerprint of the plan it was issued
   against. If the plan changed since, the old approval is invalid, so a user can
   never unknowingly approve actions they never saw.
+
+The engine holds the *logic*; where approvals are stored is an
+:class:`ApprovalStore` (in-memory here, Postgres in Stage 2).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -52,6 +56,37 @@ class Approval(BaseModel):
     decision_reason: str | None = None
 
 
+class ApprovalStore(Protocol):
+    def add(self, approval: Approval) -> None: ...
+
+    def get(self, approval_id: str) -> Approval | None: ...
+
+    def update(self, approval: Approval) -> None: ...
+
+    def pending_for_workflow(self, workflow_id: str) -> tuple[Approval, ...]: ...
+
+
+class InMemoryApprovalStore:
+    def __init__(self) -> None:
+        self._approvals: dict[str, Approval] = {}
+
+    def add(self, approval: Approval) -> None:
+        self._approvals[approval.id] = approval
+
+    def get(self, approval_id: str) -> Approval | None:
+        return self._approvals.get(approval_id)
+
+    def update(self, approval: Approval) -> None:
+        self._approvals[approval.id] = approval
+
+    def pending_for_workflow(self, workflow_id: str) -> tuple[Approval, ...]:
+        return tuple(
+            a
+            for a in self._approvals.values()
+            if a.workflow_id == workflow_id and a.status is ApprovalStatus.PENDING
+        )
+
+
 def _uuid_hex() -> str:  # pragma: no cover - trivial default
     import uuid
 
@@ -63,10 +98,11 @@ class ApprovalEngine:
         self,
         clock: Callable[[], datetime],
         id_factory: Callable[[], str] = _uuid_hex,
+        store: ApprovalStore | None = None,
     ) -> None:
         self._clock = clock
         self._id_factory = id_factory
-        self._approvals: dict[str, Approval] = {}
+        self._store: ApprovalStore = store or InMemoryApprovalStore()
 
     def request(
         self,
@@ -92,11 +128,11 @@ class ApprovalEngine:
             created_at=now,
             expires_at=now + ttl,
         )
-        self._approvals[approval.id] = approval
+        self._store.add(approval)
         return approval
 
     def get(self, approval_id: str) -> Approval:
-        approval = self._approvals.get(approval_id)
+        approval = self._store.get(approval_id)
         if approval is None:
             raise ApprovalNotFoundError(f"no such approval: {approval_id}")
         return approval
@@ -119,15 +155,11 @@ class ApprovalEngine:
         approval = self.get(approval_id)
         if approval.status is ApprovalStatus.PENDING:
             approval = approval.model_copy(update={"status": ApprovalStatus.CANCELLED})
-            self._approvals[approval_id] = approval
+            self._store.update(approval)
         return approval
 
     def pending_for_workflow(self, workflow_id: str) -> tuple[Approval, ...]:
-        return tuple(
-            a
-            for a in self._approvals.values()
-            if a.workflow_id == workflow_id and a.status is ApprovalStatus.PENDING
-        )
+        return self._store.pending_for_workflow(workflow_id)
 
     def _decide(
         self,
@@ -146,9 +178,7 @@ class ApprovalEngine:
 
         now = self._clock()
         if now > approval.expires_at:
-            self._approvals[approval_id] = approval.model_copy(
-                update={"status": ApprovalStatus.EXPIRED}
-            )
+            self._store.update(approval.model_copy(update={"status": ApprovalStatus.EXPIRED}))
             raise ApprovalExpiredError(f"approval {approval_id} expired")
 
         if plan_fingerprint != approval.plan_fingerprint:
@@ -164,5 +194,5 @@ class ApprovalEngine:
                 "decision_reason": reason,
             }
         )
-        self._approvals[approval_id] = decided
+        self._store.update(decided)
         return decided

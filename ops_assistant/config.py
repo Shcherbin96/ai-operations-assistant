@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     approval_ttl_seconds: int = 3600
+    # Postgres DSN. Unset -> the app runs fully in-memory (keyless demo).
+    database_url: str | None = None
 
 
 @lru_cache

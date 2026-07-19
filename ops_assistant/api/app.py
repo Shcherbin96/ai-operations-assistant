@@ -20,6 +20,7 @@ _STATUS_BY_CODE: dict[ErrorCode, int] = {
     ErrorCode.APPROVAL_ALREADY_DECIDED: 409,
     ErrorCode.PLAN_CHANGED: 409,
     ErrorCode.DUPLICATE_EXECUTION: 409,
+    ErrorCode.CONFLICT: 409,
     ErrorCode.STATE_TRANSITION: 409,
     ErrorCode.TOOL_EXECUTION: 502,
 }

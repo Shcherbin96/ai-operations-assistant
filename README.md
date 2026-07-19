@@ -13,12 +13,13 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: Stage 1 complete — the full control loop runs, keyless.** Plan → server-side
+> ✅ **Status: Stages 1–2 complete.** The full control loop runs keyless (plan → server-side
 > validation → auto-execute read-only → gate side-effects behind approval → execute →
-> append-only audit, over a set of sandbox tools that need no credentials. 96 tests, 100%
-> coverage, strict mypy, 3-OS CI. Stages 2–8 (Postgres, Telegram, real Gmail/Calendar, n8n,
-> RAG, evals, packaging) are still ahead — this section always tells the truth about what
-> actually works.
+> append-only audit), and all state now persists in **Postgres** behind the same interface,
+> so a paused workflow survives a restart. 105 unit tests (100% coverage, strict mypy, 3-OS
+> CI) plus 5 integration tests against a real database. Stages 3–8 (Telegram, real
+> Gmail/Calendar, n8n, RAG, evals, packaging) are still ahead — this section always tells the
+> truth about what actually works.
 
 ---
 
@@ -131,7 +132,7 @@ so the project delivers value continuously instead of becoming a never-ending pl
 - [x] **Stage 1 — Core workflow (no external APIs).** FastAPI, request models, planner
       protocol + demo planner, workflow state machine, risk policy, approval engine,
       sandbox tools, append-only audit, unit tests, CI. *A fully working demo with zero keys.*
-- [ ] **Stage 2 — Persistence.** Postgres for workflows, steps, approvals, audit events,
+- [x] **Stage 2 — Persistence.** Postgres for workflows, steps, approvals, audit events,
       tool executions, idempotency keys, optimistic locking. *State survives restart.*
 - [ ] **Stage 3 — Telegram.** Create a request, see the plan, Approve/Reject buttons,
       notifications, recent-workflow history.
@@ -177,10 +178,26 @@ curl -s -X POST localhost:8000/workflows/<WORKFLOW_ID>/approvals/<APPROVAL_ID>/a
 curl -s localhost:8000/workflows/<WORKFLOW_ID>/audit
 ```
 
+### Persistence (optional)
+
+By default everything is in-memory. Point the app at Postgres to make state
+durable — the same interface, so nothing else changes:
+
+```bash
+export OPS_DATABASE_URL=postgresql://ops:ops@localhost:5432/ops
+uv run python -m ops_assistant   # creates the schema, then serves against Postgres
+```
+
+Workflows, steps, approvals, audit events, and tool executions are persisted;
+the audit table is append-only (a DB trigger rejects UPDATE/DELETE), idempotency
+is an `ON CONFLICT` insert, and concurrent writes are caught by an optimistic
+`version` column.
+
 ### Development
 
 ```bash
-uv run pytest -v                                   # 96 tests
+uv run pytest -v                                   # 105 unit tests (no Docker needed)
+uv run pytest -m integration -o addopts=""         # 5 Postgres tests (needs Docker)
 uv run pytest --cov=ops_assistant --cov-report=term-missing
 uv run ruff check . && uv run ruff format --check . && uv run mypy ops_assistant scripts
 ```

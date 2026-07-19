@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,7 +59,26 @@ class AuditEvent(BaseModel):
     payload: dict[str, object] = Field(default_factory=dict)
 
 
+class AuditStore(Protocol):
+    def append(
+        self,
+        workflow_id: str,
+        event_type: AuditEventType,
+        *,
+        actor: str,
+        step_id: str | None = None,
+        correlation_id: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> AuditEvent: ...
+
+    def events(self) -> tuple[AuditEvent, ...]: ...
+
+    def for_workflow(self, workflow_id: str) -> tuple[AuditEvent, ...]: ...
+
+
 class AuditLog:
+    """In-memory :class:`AuditStore`. Stage 2 adds a Postgres implementation."""
+
     def __init__(self, clock: Callable[[], datetime] = _utcnow) -> None:
         self._events: list[AuditEvent] = []
         self._clock = clock

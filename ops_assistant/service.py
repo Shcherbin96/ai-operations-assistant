@@ -19,10 +19,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from ops_assistant.approval import Approval, ApprovalEngine
-from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog
+from ops_assistant.approval import Approval, ApprovalEngine, ApprovalStore
+from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog, AuditStore
 from ops_assistant.errors import NotFoundError, OpsAssistantError, StateTransitionError
-from ops_assistant.gateway import ToolGateway
+from ops_assistant.gateway import IdempotencyStore, ToolGateway
 from ops_assistant.models import (
     OperationRequest,
     RiskTier,
@@ -97,13 +97,16 @@ class OpsService:
         id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
         approval_ttl: timedelta = timedelta(hours=1),
         store: WorkflowStore | None = None,
+        approval_store: ApprovalStore | None = None,
+        audit_store: AuditStore | None = None,
+        idempotency_store: IdempotencyStore | None = None,
     ) -> None:
         self._planner = planner or DemoPlanner()
         self._registry = registry or build_sandbox_registry()
         self._policy = PolicyEngine(self._registry, policy_config or PolicyConfig())
-        self._audit = AuditLog(clock=clock)
-        self._approvals = ApprovalEngine(clock=clock, id_factory=id_factory)
-        self._gateway = ToolGateway(self._registry, self._audit)
+        self._audit: AuditStore = audit_store or AuditLog(clock=clock)
+        self._approvals = ApprovalEngine(clock=clock, id_factory=id_factory, store=approval_store)
+        self._gateway = ToolGateway(self._registry, self._audit, idempotency_store)
         self._id_factory = id_factory
         self._ttl = approval_ttl
         self._workflows: WorkflowStore = store or InMemoryWorkflowStore()
