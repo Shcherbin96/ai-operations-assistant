@@ -1,0 +1,439 @@
+"""The orchestrator — where the pieces become a workflow.
+
+``submit`` plans, validates, auto-runs the safe steps, and gates the rest.
+``approve`` / ``reject`` resume a paused workflow. Every wiring choice here serves
+one rule: nothing with an external side-effect runs until a human says so, and the
+model's opinion about risk never changes that.
+
+Stage 1 keeps all state in memory; Stage 2 swaps these dicts for Postgres behind
+the same service interface.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
+
+from ops_assistant.approval import Approval, ApprovalEngine
+from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog
+from ops_assistant.errors import NotFoundError, OpsAssistantError
+from ops_assistant.gateway import ToolGateway
+from ops_assistant.models import (
+    OperationRequest,
+    RiskTier,
+    StepStatus,
+    WorkflowStatus,
+    plan_fingerprint,
+)
+from ops_assistant.planner.base import Planner
+from ops_assistant.planner.demo import DemoPlanner
+from ops_assistant.policy import ApprovalDecision, PolicyConfig, PolicyEngine, ValidatedStep
+from ops_assistant.tools.registry import ToolRegistry
+from ops_assistant.tools.sandbox import build_sandbox_registry
+from ops_assistant.workflow import assert_step_transition, assert_workflow_transition
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+# --- Views: the read models handed back to callers and the API. ---
+
+
+class StepView(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    tool: str
+    arguments: dict[str, Any]
+    depends_on: list[str]
+    resolved_risk: RiskTier
+    decision: ApprovalDecision
+    status: StepStatus
+    risk_mismatch: bool
+    approval_id: str | None
+    output: Any | None
+    error: str | None
+
+
+class ApprovalView(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    step_id: str
+    tool: str
+    arguments: dict[str, Any]
+    risk: str
+
+
+class WorkflowView(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    status: WorkflowStatus
+    summary: str
+    requires_clarification: bool
+    clarification_question: str | None
+    steps: list[StepView]
+    pending_approvals: list[ApprovalView]
+
+
+# --- Internal mutable state. ---
+
+
+@dataclass
+class _Step:
+    validated: ValidatedStep
+    status: StepStatus = StepStatus.PENDING
+    output: object | None = None
+    approval_id: str | None = None
+    error: str | None = None
+
+
+@dataclass
+class _Workflow:
+    id: str
+    request: OperationRequest
+    status: WorkflowStatus
+    summary: str = ""
+    requires_clarification: bool = False
+    clarification_question: str | None = None
+    plan_fingerprint: str = ""
+    steps: list[_Step] = field(default_factory=list)
+
+
+def _is_empty(output: object) -> bool:
+    return output is None or (isinstance(output, (list, tuple, dict, str)) and len(output) == 0)
+
+
+class OpsService:
+    def __init__(
+        self,
+        planner: Planner | None = None,
+        registry: ToolRegistry | None = None,
+        policy_config: PolicyConfig | None = None,
+        clock: Callable[[], datetime] = _utcnow,
+        id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
+        approval_ttl: timedelta = timedelta(hours=1),
+    ) -> None:
+        self._planner = planner or DemoPlanner()
+        self._registry = registry or build_sandbox_registry()
+        self._policy = PolicyEngine(self._registry, policy_config or PolicyConfig())
+        self._audit = AuditLog(clock=clock)
+        self._approvals = ApprovalEngine(clock=clock, id_factory=id_factory)
+        self._gateway = ToolGateway(self._registry, self._audit)
+        self._id_factory = id_factory
+        self._ttl = approval_ttl
+        self._workflows: dict[str, _Workflow] = {}
+
+    # --- Public API ---
+
+    def submit(self, *, text: str, user: str, source: str) -> WorkflowView:
+        wid = self._id_factory()
+        request = OperationRequest(id=wid, text=text, user=user, source=source)
+        wf = _Workflow(id=wid, request=request, status=WorkflowStatus.CREATED)
+        self._workflows[wid] = wf
+        self._audit.append(
+            wid, AuditEventType.REQUEST_CREATED, actor=user, payload={"source": source}
+        )
+
+        plan = self._planner.plan(request)
+        wf.summary = plan.summary
+        self._to(wf, WorkflowStatus.PLANNED)
+        self._audit.append(
+            wid,
+            AuditEventType.PLAN_GENERATED,
+            actor="planner",
+            payload={"summary": plan.summary, "steps": len(plan.steps)},
+        )
+
+        if plan.requires_clarification:
+            wf.requires_clarification = True
+            wf.clarification_question = plan.clarification_question
+            return self._view(wf)
+
+        self._to(wf, WorkflowStatus.VALIDATING)
+        try:
+            validated = self._policy.validate(plan)
+        except OpsAssistantError:
+            self._to(wf, WorkflowStatus.FAILED)
+            self._audit.append(wid, AuditEventType.WORKFLOW_FAILED, actor="policy")
+            raise
+
+        wf.plan_fingerprint = plan_fingerprint(plan)
+        self._audit.append(
+            wid,
+            AuditEventType.PLAN_VALIDATED,
+            actor="policy",
+            payload={"steps": len(validated.steps)},
+        )
+        for vs in validated.steps:
+            if vs.risk_mismatch:
+                self._audit.append(
+                    wid,
+                    AuditEventType.RISK_MISMATCH_DETECTED,
+                    actor="policy",
+                    step_id=vs.id,
+                    payload={
+                        "tool": vs.tool,
+                        "claimed": vs.claimed_risk.value if vs.claimed_risk else None,
+                        "resolved": vs.resolved_risk.value,
+                    },
+                )
+        wf.steps = [_Step(validated=vs) for vs in validated.steps]
+
+        self._run(wf)
+        return self._view(wf)
+
+    def approve(
+        self, workflow_id: str, approval_id: str, *, actor: str, reason: str | None = None
+    ) -> WorkflowView:
+        wf = self._require(workflow_id)
+        approval = self._approvals.approve(
+            approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
+        )
+        self._audit.append(
+            wf.id,
+            AuditEventType.APPROVAL_APPROVED,
+            actor=actor,
+            step_id=approval.step_id,
+            payload={"approval_id": approval_id, "tool": approval.tool},
+        )
+        self._to(wf, WorkflowStatus.APPROVED)
+        self._ensure_executing(wf)
+        self._execute_step(wf, self._step(wf, approval.step_id))
+        self._run(wf)
+        return self._view(wf)
+
+    def reject(
+        self, workflow_id: str, approval_id: str, *, actor: str, reason: str | None = None
+    ) -> WorkflowView:
+        wf = self._require(workflow_id)
+        approval = self._approvals.reject(
+            approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
+        )
+        self._audit.append(
+            wf.id,
+            AuditEventType.APPROVAL_REJECTED,
+            actor=actor,
+            step_id=approval.step_id,
+            payload={"approval_id": approval_id, "reason": reason},
+        )
+        self._set_step(wf, self._step(wf, approval.step_id), StepStatus.REJECTED)
+        self._propagate_skips(wf)
+        self._to(wf, WorkflowStatus.REJECTED)
+        return self._view(wf)
+
+    def get(self, workflow_id: str) -> WorkflowView:
+        return self._view(self._require(workflow_id))
+
+    def audit_for(self, workflow_id: str) -> tuple[AuditEvent, ...]:
+        return self._audit.for_workflow(workflow_id)
+
+    # --- Execution engine ---
+
+    def _run(self, wf: _Workflow) -> None:
+        """Make all possible progress, then settle the workflow status."""
+        while True:
+            self._propagate_skips(wf)
+            ready = self._ready_auto_steps(wf)
+            if not ready:
+                break
+            self._ensure_executing(wf)
+            for step in ready:
+                self._execute_step(wf, step)
+
+        for step in self._ready_approval_steps(wf):
+            self._request_approval(wf, step)
+
+        self._settle(wf)
+
+    def _propagate_skips(self, wf: _Workflow) -> None:
+        changed = True
+        while changed:
+            changed = False
+            for step in wf.steps:
+                if step.status is not StepStatus.PENDING:
+                    continue
+                deps = [self._step(wf, d) for d in step.validated.depends_on]
+                blocked = any(
+                    d.status in (StepStatus.FAILED, StepStatus.REJECTED, StepStatus.SKIPPED)
+                    or (d.status is StepStatus.SUCCEEDED and _is_empty(d.output))
+                    for d in deps
+                )
+                if blocked:
+                    self._set_step(wf, step, StepStatus.SKIPPED)
+                    self._audit.append(
+                        wf.id,
+                        AuditEventType.STEP_SKIPPED,
+                        actor="executor",
+                        step_id=step.validated.id,
+                        payload={"reason": "upstream dependency not satisfied"},
+                    )
+                    changed = True
+
+    def _deps_succeeded(self, wf: _Workflow, step: _Step) -> bool:
+        return all(
+            self._step(wf, d).status is StepStatus.SUCCEEDED for d in step.validated.depends_on
+        )
+
+    def _ready_auto_steps(self, wf: _Workflow) -> list[_Step]:
+        return [
+            s
+            for s in wf.steps
+            if s.status is StepStatus.PENDING
+            and s.validated.decision is ApprovalDecision.AUTO
+            and self._deps_succeeded(wf, s)
+        ]
+
+    def _ready_approval_steps(self, wf: _Workflow) -> list[_Step]:
+        return [
+            s
+            for s in wf.steps
+            if s.status is StepStatus.PENDING
+            and s.validated.decision is ApprovalDecision.REQUIRES_APPROVAL
+            and s.approval_id is None
+            and self._deps_succeeded(wf, s)
+        ]
+
+    def _execute_step(self, wf: _Workflow, step: _Step) -> None:
+        self._set_step(wf, step, StepStatus.RUNNING)
+        self._audit.append(
+            wf.id,
+            AuditEventType.STEP_STARTED,
+            actor="executor",
+            step_id=step.validated.id,
+            payload={"tool": step.validated.tool},
+        )
+        try:
+            result = self._gateway.execute(
+                wf.id,
+                step.validated.id,
+                step.validated.tool,
+                step.validated.arguments,
+                idempotency_key=f"{wf.id}:{step.validated.id}",
+            )
+        except OpsAssistantError as exc:
+            step.error = exc.message
+            self._set_step(wf, step, StepStatus.FAILED)
+            self._audit.append(
+                wf.id,
+                AuditEventType.STEP_FAILED,
+                actor="executor",
+                step_id=step.validated.id,
+                payload={"tool": step.validated.tool},
+            )
+            return
+        step.output = result.output
+        self._set_step(wf, step, StepStatus.SUCCEEDED)
+        self._audit.append(
+            wf.id,
+            AuditEventType.STEP_SUCCEEDED,
+            actor="executor",
+            step_id=step.validated.id,
+            payload={"tool": step.validated.tool},
+        )
+
+    def _request_approval(self, wf: _Workflow, step: _Step) -> None:
+        approval = self._approvals.request(
+            workflow_id=wf.id,
+            step_id=step.validated.id,
+            plan_fingerprint=wf.plan_fingerprint,
+            tool=step.validated.tool,
+            arguments=step.validated.arguments,
+            risk=step.validated.resolved_risk.value,
+            ttl=self._ttl,
+        )
+        step.approval_id = approval.id
+        self._set_step(wf, step, StepStatus.AWAITING_APPROVAL)
+        self._audit.append(
+            wf.id,
+            AuditEventType.APPROVAL_REQUESTED,
+            actor="system",
+            step_id=step.validated.id,
+            payload={
+                "tool": step.validated.tool,
+                "approval_id": approval.id,
+                "risk": step.validated.resolved_risk.value,
+            },
+        )
+
+    def _settle(self, wf: _Workflow) -> None:
+        if any(s.status is StepStatus.AWAITING_APPROVAL for s in wf.steps):
+            self._to(wf, WorkflowStatus.AWAITING_APPROVAL)
+            return
+        if any(s.status in (StepStatus.PENDING, StepStatus.RUNNING) for s in wf.steps):
+            return  # pragma: no cover - defensive: nothing runnable should reach settle
+        if any(s.status is StepStatus.FAILED for s in wf.steps):
+            self._ensure_executing(wf)
+            self._to(wf, WorkflowStatus.FAILED)
+            self._audit.append(wf.id, AuditEventType.WORKFLOW_FAILED, actor="system")
+            return
+        self._ensure_executing(wf)
+        self._to(wf, WorkflowStatus.COMPLETED)
+        self._audit.append(wf.id, AuditEventType.WORKFLOW_COMPLETED, actor="system")
+
+    # --- Transitions & lookups ---
+
+    def _ensure_executing(self, wf: _Workflow) -> None:
+        if wf.status is not WorkflowStatus.EXECUTING:
+            self._to(wf, WorkflowStatus.EXECUTING)
+
+    def _to(self, wf: _Workflow, target: WorkflowStatus) -> None:
+        assert_workflow_transition(wf.status, target)
+        wf.status = target
+
+    def _set_step(self, wf: _Workflow, step: _Step, target: StepStatus) -> None:
+        assert_step_transition(step.status, target)
+        step.status = target
+
+    def _require(self, workflow_id: str) -> _Workflow:
+        wf = self._workflows.get(workflow_id)
+        if wf is None:
+            raise NotFoundError(f"no such workflow: {workflow_id}")
+        return wf
+
+    def _step(self, wf: _Workflow, step_id: str) -> _Step:
+        for step in wf.steps:
+            if step.validated.id == step_id:
+                return step
+        raise NotFoundError(f"no such step: {step_id}")  # pragma: no cover - defensive
+
+    # --- View building ---
+
+    def _view(self, wf: _Workflow) -> WorkflowView:
+        pending: Sequence[Approval] = self._approvals.pending_for_workflow(wf.id)
+        return WorkflowView(
+            id=wf.id,
+            status=wf.status,
+            summary=wf.summary,
+            requires_clarification=wf.requires_clarification,
+            clarification_question=wf.clarification_question,
+            steps=[
+                StepView(
+                    id=s.validated.id,
+                    tool=s.validated.tool,
+                    arguments=s.validated.arguments,
+                    depends_on=s.validated.depends_on,
+                    resolved_risk=s.validated.resolved_risk,
+                    decision=s.validated.decision,
+                    status=s.status,
+                    risk_mismatch=s.validated.risk_mismatch,
+                    approval_id=s.approval_id,
+                    output=s.output,
+                    error=s.error,
+                )
+                for s in wf.steps
+            ],
+            pending_approvals=[
+                ApprovalView(
+                    id=a.id, step_id=a.step_id, tool=a.tool, arguments=a.arguments, risk=a.risk
+                )
+                for a in pending
+            ],
+        )

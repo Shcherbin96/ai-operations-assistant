@@ -1,0 +1,52 @@
+[project]
+name = "ai-operations-assistant"
+version = "0.1.0"
+description = "NL business requests to a server-validated action plan; the model proposes, the server decides what runs"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "fastapi>=0.115",       # API layer
+    "pydantic>=2.9",        # strict data contracts everywhere
+    "pydantic-settings>=2.5", # env-driven config
+    "uvicorn>=0.30",        # ASGI server for `serve`
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "httpx>=0.27",          # FastAPI TestClient transport
+    "httpx2>=2.7.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["ops_assistant", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = ["ops_assistant/__main__.py"]  # server entrypoint, exercised by running, not unit tests
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+]
