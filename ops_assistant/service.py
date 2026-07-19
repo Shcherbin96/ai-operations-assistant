@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ops_assistant.approval import Approval, ApprovalEngine, ApprovalStore
 from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog, AuditStore
+from ops_assistant.dataflow import resolve_references
 from ops_assistant.errors import NotFoundError, OpsAssistantError, StateTransitionError
 from ops_assistant.gateway import IdempotencyStore, ToolGateway
 from ops_assistant.models import (
@@ -319,6 +320,13 @@ class OpsService:
                     )
                     changed = True
 
+    def _succeeded_outputs(self, wf: _Workflow) -> dict[str, object]:
+        return {
+            s.validated.id: s.output
+            for s in wf.steps
+            if s.status is StepStatus.SUCCEEDED and s.output is not None
+        }
+
     def _deps_succeeded(self, wf: _Workflow, step: _Step) -> bool:
         return all(
             self._step(wf, d).status is StepStatus.SUCCEEDED for d in step.validated.depends_on
@@ -352,12 +360,13 @@ class OpsService:
             step_id=step.validated.id,
             payload={"tool": step.validated.tool},
         )
+        arguments = resolve_references(step.validated.arguments, self._succeeded_outputs(wf))
         try:
             result = self._gateway.execute(
                 wf.id,
                 step.validated.id,
                 step.validated.tool,
-                step.validated.arguments,
+                arguments,
                 idempotency_key=f"{wf.id}:{step.validated.id}",
             )
         except OpsAssistantError as exc:

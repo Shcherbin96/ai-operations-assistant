@@ -91,6 +91,7 @@ def test_system_prompt_lists_tools_and_forbids_injection() -> None:
     assert "calendar.find_free_time" in system  # tools are offered
     assert "email.send" in system
     assert "ignore" in system.lower()  # prompt-injection guardrail is stated
+    assert "{{step_id.field}}" in system  # the data-flow reference syntax is documented
 
 
 def test_client_failure_fails_closed_instead_of_crashing() -> None:

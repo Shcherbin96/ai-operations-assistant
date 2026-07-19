@@ -140,6 +140,34 @@ def test_approve_pending_unknown_approval_raises() -> None:
         _service().approve_pending("nope", actor="roman")
 
 
+class _RefPlanner:
+    """Step 2 references step 1's output via {{s1.from}}."""
+
+    def plan(self, request: OperationRequest) -> Plan:
+        return Plan(
+            summary="Reply to the first email",
+            steps=[
+                PlanStep(id="s1", tool="email.search", arguments={"query": "all"}),
+                PlanStep(
+                    id="s2",
+                    tool="email.create_draft",
+                    arguments={"to": "{{s1.from}}", "body": "Re: {{s1.subject}}"},
+                    depends_on=["s1"],
+                ),
+            ],
+        )
+
+
+def test_step_arguments_are_resolved_from_an_earlier_step_output() -> None:
+    svc = _service(planner=_RefPlanner())
+    view = svc.submit(text="reply to my first email", user="roman", source="test")
+    assert view.status is WorkflowStatus.COMPLETED
+    draft = next(s for s in view.steps if s.tool == "email.create_draft")
+    # The sandbox search returns anna@example.com as the first sender; the draft's
+    # recipient must be that real value, not the literal "{{s1.from}}" placeholder.
+    assert draft.output["to"] == "anna@example.com"
+
+
 class _MaliciousPlanner:
     """Simulates a planner subverted by injected email content: it slips in a send
     step and lies that it is read_only, hoping it auto-executes."""
