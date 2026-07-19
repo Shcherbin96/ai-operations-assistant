@@ -155,6 +155,28 @@ def test_approve_callback_executes_and_edits_the_message() -> None:
     assert tx.answered == [("cb1", "Approved")]
 
 
+def test_approval_is_attributed_to_the_stable_user_id() -> None:
+    # The audit's "who approved" must survive a handle change, so it records the
+    # stable Telegram user id, not just the mutable @handle.
+    from ops_assistant.audit import AuditEventType
+
+    bot, tx = _bot()
+    bot.handle_message(
+        chat_id=100, user_id=42, user_name="roman", text="send an email to anna@example.com"
+    )
+    approve_data = tx.sent[0].buttons[0][0].callback_data  # type: ignore[index]
+    bot.handle_callback(
+        callback_id="cb",
+        chat_id=100,
+        message_id=5,
+        user_id=42,
+        user_name="roman",
+        data=approve_data,
+    )
+    approved = [e for e in bot._svc.all_audit() if e.event_type is AuditEventType.APPROVAL_APPROVED]
+    assert approved and "telegram:42" in approved[0].actor
+
+
 def test_reject_callback_edits_to_rejected() -> None:
     bot, tx = _bot()
     _msg(bot, "send an email to anna@example.com")

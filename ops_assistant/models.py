@@ -59,7 +59,6 @@ class StepStatus(StrEnum):
     """Lifecycle of a single step inside a workflow."""
 
     PENDING = "pending"
-    BLOCKED = "blocked"
     AWAITING_APPROVAL = "awaiting_approval"
     RUNNING = "running"
     SUCCEEDED = "succeeded"

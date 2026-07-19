@@ -55,15 +55,11 @@ WORKFLOW_TRANSITIONS: dict[WorkflowStatus, frozenset[WorkflowStatus]] = {
 STEP_TRANSITIONS: dict[StepStatus, frozenset[StepStatus]] = {
     StepStatus.PENDING: frozenset(
         {
-            StepStatus.BLOCKED,
             StepStatus.AWAITING_APPROVAL,
             StepStatus.RUNNING,
             StepStatus.SKIPPED,
             StepStatus.REJECTED,
         }
-    ),
-    StepStatus.BLOCKED: frozenset(
-        {StepStatus.PENDING, StepStatus.RUNNING, StepStatus.AWAITING_APPROVAL, StepStatus.SKIPPED}
     ),
     StepStatus.AWAITING_APPROVAL: frozenset(
         {StepStatus.RUNNING, StepStatus.REJECTED, StepStatus.SKIPPED}

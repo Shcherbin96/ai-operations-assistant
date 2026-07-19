@@ -273,6 +273,21 @@ def test_reference_without_a_declared_dependency_is_refused() -> None:
         svc.submit(text="reply", user="roman", source="test")
 
 
+def test_deployment_tool_allowlist_refuses_off_list_tools() -> None:
+    from ops_assistant.errors import ToolNotAllowedError
+
+    # Restrict the deployment to read-only search; a plan that tries to send is refused.
+    svc = _service(allowed_tools=frozenset({"email.search"}))
+    with pytest.raises(ToolNotAllowedError):
+        svc.submit(text="send an email to anna@example.com", user="roman", source="test")
+
+
+def test_deployment_tool_allowlist_permits_listed_tools() -> None:
+    svc = _service(allowed_tools=frozenset({"calendar.find_free_time"}))
+    view = svc.submit(text="find free time tomorrow", user="roman", source="test")
+    assert view.status is WorkflowStatus.COMPLETED
+
+
 def test_redact_for_audit_keeps_forensics_and_literals_but_summarizes_referenced_data() -> None:
     from ops_assistant.service import _redact_for_audit
 

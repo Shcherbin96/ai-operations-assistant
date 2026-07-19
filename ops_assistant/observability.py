@@ -2,6 +2,11 @@
 
 Because every meaningful event is already recorded, aggregate metrics are just a
 fold over the audit log — no separate counters to drift out of sync with reality.
+
+This is an O(n) fold over the events handed in, which is fine at the demo/portfolio
+scale this targets. For a large trail the documented upgrade is to aggregate in the
+store (a SQL ``GROUP BY event_type``) and hand the counts here, rather than
+materialising every event on each ``/metrics`` request.
 """
 
 from __future__ import annotations

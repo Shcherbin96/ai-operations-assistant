@@ -1,5 +1,11 @@
 # Stage 2 — Persistence
 
+> **Historical design note.** Superseded by [ADR-0002](../adr/0002-storage-seams.md)
+> (the as-built storage seams) and [ADR-0005](../adr/0005-single-process-locking.md)
+> (schema is created via `create_all`; Alembic, which this note anticipated, is the
+> documented upgrade — not shipped). Kept for provenance.
+
+
 **Goal:** the system no longer loses state on restart. Workflows, steps, approvals,
 audit events, and tool executions live in Postgres, behind the *same* service
 interface Stage 1 already exercises — so all 105 existing tests keep passing

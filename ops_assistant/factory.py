@@ -76,6 +76,12 @@ def service_from_settings(settings: Settings) -> OpsService:  # pragma: no cover
         n8n_client = HttpN8nClient(settings.n8n_base_url, settings.n8n_secret)
         registry.register(build_n8n_tool(n8n_client, workflows))
 
+    allowed_tools = (
+        frozenset(t.strip() for t in settings.allowed_tools.split(",") if t.strip())
+        if settings.allowed_tools
+        else None
+    )
+
     planner = None
     if settings.llm_api_key and settings.llm_model:
         from ops_assistant.planner.llm import LLMPlanner
@@ -88,7 +94,11 @@ def service_from_settings(settings: Settings) -> OpsService:  # pragma: no cover
         )
         planner = LLMPlanner(client, registry)
 
-    kwargs: dict[str, Any] = {"registry": registry, "planner": planner}
+    kwargs: dict[str, Any] = {
+        "registry": registry,
+        "planner": planner,
+        "allowed_tools": allowed_tools,
+    }
     if settings.database_url:
         engine = build_engine(settings.database_url)
         create_schema(engine)

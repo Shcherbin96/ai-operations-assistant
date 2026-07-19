@@ -40,7 +40,6 @@ _STATUS_EMOJI: dict[StepStatus, str] = {
     StepStatus.AWAITING_APPROVAL: "⏸️",
     StepStatus.RUNNING: "⏳",
     StepStatus.PENDING: "•",
-    StepStatus.BLOCKED: "•",
 }
 
 
@@ -155,13 +154,17 @@ class TelegramBot:
             self._tx.answer_callback(callback_id, "⛔ Not authorized")
             return
 
+        # Attribute the decision to the stable, authenticated user id, not just the
+        # display handle (which the user can change) — the audit's "who approved"
+        # must stay meaningful over time.
+        actor = f"{user_name} (telegram:{user_id})"
         action, _, approval_id = data.partition(":")
         try:
             if action == "a":
-                view = self._svc.approve_pending(approval_id, actor=user_name)
+                view = self._svc.approve_pending(approval_id, actor=actor)
                 toast = "Approved"
             elif action == "r":
-                view = self._svc.reject_pending(approval_id, actor=user_name)
+                view = self._svc.reject_pending(approval_id, actor=actor)
                 toast = "Rejected"
             else:
                 self._tx.answer_callback(callback_id, "Unknown action")
