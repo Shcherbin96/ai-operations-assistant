@@ -13,7 +13,7 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: `v1.1.0` — all eight stages complete and live.** A plain-language request → an
+> ✅ **Status: `v1.2.0` — all eight stages complete and live.** A plain-language request → an
 > **LLM produces a structured plan** → the server re-derives risk and gates side-effects behind
 > approval → executes → append-only audit. Plan steps can now feed each other: a later step
 > references an earlier step's real output with `{{step_id.field}}` (**inter-step data-flow**),
@@ -21,8 +21,9 @@ it does so **under control** — the model never holds authority it can grant it
 > **Postgres** (a paused workflow survives a restart); a **Telegram bot** drives it end-to-end
 > against real **Gmail/Calendar** (verified live); a **knowledge base** answers policy questions
 > with citations; **n8n** workflows run via signed webhooks; and an **eval gate** plus `/metrics`
-> keep it honest. 194 unit tests (100% coverage, strict mypy, 3-OS CI), 10 Postgres integration
-> tests, and a verified Docker build. This section always tells the truth about what works.
+> keep it honest, and it **deploys always-on** as a sandbox-only public demo bot
+> ([DEPLOY.md](DEPLOY.md)). 202 unit tests (100% coverage, strict mypy, 3-OS CI), 10 Postgres
+> integration tests, and a verified Docker build. This section always tells the truth about what works.
 
 ---
 
@@ -153,6 +154,8 @@ so the project delivers value continuously instead of becoming a never-ending pl
 - [x] **v1.1 — Inter-step data-flow.** A plan step references an earlier step's output with
       `{{step_id.field}}`; the executor resolves it against succeeded steps before running,
       so steps compose into real multi-step workflows instead of isolated actions.
+- [x] **v1.2 — Always-on demo.** Sandbox-only public bot deployed 24/7 (Fly.io worker),
+      with per-user rate limiting to guard the LLM budget. See [DEPLOY.md](DEPLOY.md).
 
 ## Out of scope (v1)
 
@@ -190,6 +193,12 @@ curl -s localhost:8000/workflows/<WORKFLOW_ID>/audit
 ```bash
 docker compose up --build   # app on :8000, backed by Postgres
 ```
+
+### Deploy the demo bot always-on
+
+To run the Telegram bot 24/7 as a public, **sandbox-only** demo (no real Gmail,
+per-user rate limiting, one command to Fly.io), see **[DEPLOY.md](DEPLOY.md)** —
+it includes the abuse/cost safeguards and an ordered checklist.
 
 ### Persistence (optional)
 

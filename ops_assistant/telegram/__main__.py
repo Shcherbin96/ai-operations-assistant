@@ -8,6 +8,7 @@ from __future__ import annotations
 from ops_assistant.config import get_settings
 from ops_assistant.factory import service_from_settings
 from ops_assistant.telegram.bot import TelegramBot
+from ops_assistant.telegram.ratelimit import RateLimiter
 from ops_assistant.telegram.runner import run_polling
 from ops_assistant.telegram.transport import HttpTelegramTransport
 
@@ -22,8 +23,16 @@ def main() -> None:  # pragma: no cover - live entrypoint
         raise SystemExit("Set OPS_TELEGRAM_TOKEN (from @BotFather) to run the Telegram bot.")
     service = service_from_settings(settings)
     allowed = _parse_allowed(settings.telegram_allowed_users)
+    limiter = (
+        RateLimiter(
+            max_events=settings.telegram_rate_limit,
+            window_seconds=settings.telegram_rate_window_seconds,
+        )
+        if settings.telegram_rate_limit > 0
+        else None
+    )
     transport = HttpTelegramTransport(settings.telegram_token)
-    bot = TelegramBot(service, transport, allowed or None)
+    bot = TelegramBot(service, transport, allowed or None, limiter)
     print("AI Operations Assistant bot is polling. Press Ctrl+C to stop.")
     run_polling(bot, transport)
 

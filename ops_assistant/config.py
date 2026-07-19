@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     telegram_token: str | None = None
     # Optional allowlist of Telegram user ids (comma-separated). Empty -> open (demo).
     telegram_allowed_users: str = ""
+    # Public-demo guard: max requests per user per window. 0 -> no rate limiting.
+    telegram_rate_limit: int = 0
+    telegram_rate_window_seconds: float = 60.0
     # Google OAuth (Stage 4). Unset -> Gmail/Calendar tools fall back to the sandbox.
     google_client_secrets: str | None = None
     google_token_path: str = "token.json"
