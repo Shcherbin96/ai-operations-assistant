@@ -13,13 +13,15 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: Stages 1–3 complete.** The full control loop runs keyless (plan → server-side
-> validation → auto-execute read-only → gate side-effects behind approval → execute →
-> append-only audit); all state persists in **Postgres** behind the same interface (a paused
-> workflow survives a restart); and a **Telegram bot** drives it end-to-end — send a request,
-> get the plan, tap Approve/Reject. 122 unit tests (100% coverage, strict mypy, 3-OS CI) plus
-> 10 integration tests against a real database. Stages 4–8 (real Gmail/Calendar, n8n, RAG,
-> evals, packaging) are still ahead — this section always tells the truth about what works.
+> ✅ **Status: Stages 1–3 complete; Stage 4 (Gmail/Calendar) code-complete, pending live auth.**
+> The full control loop runs keyless (plan → server-side validation → auto-execute read-only →
+> gate side-effects behind approval → execute → append-only audit); all state persists in
+> **Postgres** behind the same interface (a paused workflow survives a restart); and a
+> **Telegram bot** drives it end-to-end. Stage 4 adds real **Gmail/Calendar** tools under the
+> same names and risk tiers as the sandbox (only the handlers change) plus an OAuth flow — the
+> tool layer is unit-tested; the live Google path awaits a one-time consent. 141 unit tests
+> (100% coverage, strict mypy, 3-OS CI) plus 10 integration tests. Stages 5–8 (n8n, RAG, evals,
+> packaging) are still ahead — this section always tells the truth about what works.
 
 ---
 
@@ -210,6 +212,25 @@ Send *"send an email to anna@example.com"* and the bot replies with the plan and
 **Approve / Reject** buttons; tapping one runs (or declines) the gated step and edits
 the message with the outcome. The bot logic is transport-agnostic, so it is fully
 unit-tested without a token or network.
+
+### Real Gmail & Calendar (Stage 4)
+
+Optional — without it, the same tool names run against the keyless sandbox. To go
+live, in [Google Cloud Console](https://console.cloud.google.com): enable the
+**Gmail** and **Google Calendar** APIs, configure the OAuth consent screen and add
+yourself as a **Test user**, then create an **OAuth client ID → Desktop app** and
+download the JSON. Then:
+
+```bash
+export OPS_GOOGLE_CLIENT_SECRETS=/path/to/client_secret.json
+uv run python -m ops_assistant.gworkspace auth   # opens your browser; you consent
+```
+
+That caches a `token.json` (gitignored). From then on, `email.*` / `calendar.*`
+tools hit the real APIs — read is auto, drafts are safe, and **send / create-event
+are gated behind approval** exactly as before. Requested scopes: Gmail
+readonly + compose, Calendar events. Your credentials are never entered by the
+assistant — you complete the consent yourself.
 
 ### Development
 

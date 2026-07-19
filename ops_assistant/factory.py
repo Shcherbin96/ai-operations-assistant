@@ -46,9 +46,20 @@ def make_postgres_service(
 
 
 def service_from_settings(settings: Settings) -> OpsService:  # pragma: no cover - wiring
-    """Build a Postgres-backed service if OPS_DATABASE_URL is set, else in-memory."""
+    """Build the service from config: Postgres if OPS_DATABASE_URL is set (else
+    in-memory), and real Gmail/Calendar tools if a Google token is available (else
+    the keyless sandbox)."""
+    registry = None
+    if settings.google_client_secrets:
+        from ops_assistant.gworkspace.auth import load_credentials
+        from ops_assistant.gworkspace.live import build_live_registry
+
+        creds = load_credentials(settings.google_client_secrets, settings.google_token_path)
+        if creds is not None:
+            registry = build_live_registry(creds)
+
     if settings.database_url:
         engine = build_engine(settings.database_url)
         create_schema(engine)
-        return make_postgres_service(engine)
-    return OpsService()
+        return make_postgres_service(engine, registry=registry)
+    return OpsService(registry=registry)
