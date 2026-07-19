@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+
+# Databases / local state
+*.db
+*.sqlite3
+data/
+
+# OS
+.DS_Store
