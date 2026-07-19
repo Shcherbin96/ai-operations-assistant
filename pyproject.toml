@@ -1,6 +1,6 @@
 [project]
 name = "ai-operations-assistant"
-version = "1.0.0"
+version = "1.1.0"
 description = "NL business requests to a server-validated action plan; the model proposes, the server decides what runs"
 requires-python = ">=3.12"
 license = "MIT"

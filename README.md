@@ -13,14 +13,16 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: `v1.0.0` — all eight stages complete and live.** A plain-language request → an
+> ✅ **Status: `v1.1.0` — all eight stages complete and live.** A plain-language request → an
 > **LLM produces a structured plan** → the server re-derives risk and gates side-effects behind
-> approval → executes → append-only audit. State persists in **Postgres** (a paused workflow
-> survives a restart); a **Telegram bot** drives it end-to-end against real **Gmail/Calendar**
-> (verified live); a **knowledge base** answers policy questions with citations; **n8n** workflows
-> run via signed webhooks; and an **eval gate** plus `/metrics` keep it honest. 186 unit tests
-> (100% coverage, strict mypy, 3-OS CI), 10 Postgres integration tests, and a verified Docker
-> build. This section always tells the truth about what works.
+> approval → executes → append-only audit. Plan steps can now feed each other: a later step
+> references an earlier step's real output with `{{step_id.field}}` (**inter-step data-flow**),
+> so a drafted reply goes to the *actual* sender the search step found. State persists in
+> **Postgres** (a paused workflow survives a restart); a **Telegram bot** drives it end-to-end
+> against real **Gmail/Calendar** (verified live); a **knowledge base** answers policy questions
+> with citations; **n8n** workflows run via signed webhooks; and an **eval gate** plus `/metrics`
+> keep it honest. 194 unit tests (100% coverage, strict mypy, 3-OS CI), 10 Postgres integration
+> tests, and a verified Docker build. This section always tells the truth about what works.
 
 ---
 
@@ -138,7 +140,7 @@ so the project delivers value continuously instead of becoming a never-ending pl
 - [x] **Stage 3 — Telegram.** Create a request, see the plan, Approve/Reject buttons.
       Bot logic is transport-agnostic and fully unit-tested; a long-polling client
       drives it live.
-- [ ] **Stage 4 — Gmail & Calendar.** Real read-only operations, then gated writes
+- [x] **Stage 4 — Gmail & Calendar.** Real read-only operations, then gated writes
       (drafts, event holds; send / invite only after approval).
 - [x] **Stage 5 — n8n gateway.** Signed webhooks, workflow allowlist, schema validation,
       execution status, audit logging.
@@ -148,6 +150,9 @@ so the project delivers value continuously instead of becoming a never-ending pl
       evals, regression gate, latency / tokens / cost / tool-success dashboards.
 - [x] **Stage 8 — Portfolio packaging.** Architecture diagram, screenshots, demo video,
       case study, Docker Compose, public demo mode, `v1.0.0` release.
+- [x] **v1.1 — Inter-step data-flow.** A plan step references an earlier step's output with
+      `{{step_id.field}}`; the executor resolves it against succeeded steps before running,
+      so steps compose into real multi-step workflows instead of isolated actions.
 
 ## Out of scope (v1)
 

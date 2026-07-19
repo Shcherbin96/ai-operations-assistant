@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0 — 2026-07-19
+
+### Added
+
+- **Inter-step data-flow.** A plan step can reference an earlier step's output
+  with `{{step_id.field}}` (dotted paths, array indices, and whole-output
+  `{{step_id}}` supported). The executor resolves references against the outputs
+  of steps that already succeeded, so a drafted reply goes to the *actual* sender
+  found by the search step — not a placeholder. The LLM planner is taught the
+  syntax; the resolver tolerates the shapes models tend to guess
+  (`results[0].from`) and leaves anything unresolvable literal, never silently
+  wrong. This closes the one known gap from 1.0.0.
+
 ## 1.0.0 — 2026-07-19
 
 First stable release. A natural-language operations assistant built around one
@@ -38,7 +51,7 @@ adversarial review. Docker + Compose for a one-command run.
 ### Known limitations
 
 - No data-flow between plan steps yet (a step's arguments are static from the
-  plan, not filled from an earlier step's output).
+  plan, not filled from an earlier step's output). *(Resolved in 1.1.0.)*
 - The live Gmail/Calendar send/create paths and the n8n webhook are exercised by
   running, not in CI (they need real credentials / an n8n instance).
 - Retrieval is TF-IDF; embeddings + pgvector are a documented upgrade behind the
