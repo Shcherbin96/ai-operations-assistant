@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ops_assistant.errors import ErrorCode, OpsAssistantError
+from ops_assistant.observability import compute_metrics
 from ops_assistant.service import OpsService, WorkflowView
 
 _STATUS_BY_CODE: dict[ErrorCode, int] = {
@@ -51,6 +52,10 @@ def create_app(service: OpsService | None = None) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    def metrics() -> dict[str, object]:
+        return compute_metrics(svc.all_audit())
 
     @app.post("/requests", status_code=201, response_model=WorkflowView)
     def submit(body: SubmitBody) -> WorkflowView:

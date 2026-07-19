@@ -16,6 +16,17 @@ def test_healthz() -> None:
     assert resp.json()["status"] == "ok"
 
 
+def test_metrics_endpoint() -> None:
+    client = _client()
+    client.post("/requests", json={"text": "find free time", "user": "roman", "source": "web"})
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["requests"] == 1
+    assert body["workflows_completed"] == 1
+    assert "tool_success_rate" in body
+
+
 def test_submit_read_only_request_completes() -> None:
     client = _client()
     resp = client.post(

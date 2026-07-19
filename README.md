@@ -19,7 +19,7 @@ it does so **under control** — the model never holds authority it can grant it
 > **Postgres** (a paused workflow survives a restart); a **Telegram bot** drives it end-to-end
 > against real **Gmail/Calendar** (verified live); and a **knowledge base** (`knowledge.search`)
 > answers policy questions with citations. 173 unit tests (100% coverage, strict mypy, 3-OS CI)
-> plus 10 integration tests. Still ahead: n8n, evals/observability, packaging + `v1.0.0`. This
+> plus 10 integration tests. Still ahead: n8n, packaging + `v1.0.0`. This
 > section always tells the truth about what works.
 
 ---
@@ -144,7 +144,7 @@ so the project delivers value continuously instead of becoming a never-ending pl
       execution status, audit logging.
 - [x] **Stage 6 — RAG.** Corporate policy retrieval with citations, source snapshots,
       permission filters.
-- [ ] **Stage 7 — Evals & observability.** Golden dataset, planner evals, scheduled live
+- [x] **Stage 7 — Evals & observability.** Golden dataset, planner evals, scheduled live
       evals, regression gate, latency / tokens / cost / tool-success dashboards.
 - [ ] **Stage 8 — Portfolio packaging.** Architecture diagram, screenshots, demo video,
       case study, Docker Compose, public demo mode, `v1.0.0` release.
