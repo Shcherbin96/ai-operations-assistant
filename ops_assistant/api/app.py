@@ -6,7 +6,9 @@ errors to status codes. All the logic lives in the service and the layers beneat
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
+import hmac
+
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -39,8 +41,19 @@ class DecisionBody(BaseModel):
     reason: str | None = None
 
 
-def create_app(service: OpsService | None = None) -> FastAPI:
+def create_app(service: OpsService | None = None, *, api_key: str | None = None) -> FastAPI:
     svc = service or OpsService()
+
+    def require_api_key(request: Request) -> None:
+        """Gate the state-changing endpoints. No key configured -> open (demo)."""
+        if api_key is None:
+            return
+        header = request.headers.get("Authorization", "")
+        if not hmac.compare_digest(header, f"Bearer {api_key}"):  # constant-time
+            raise HTTPException(status_code=401, detail="missing or invalid API key")
+
+    guarded = [Depends(require_api_key)]
+
     app = FastAPI(
         title="AI Operations Assistant",
         version=__version__,
@@ -67,7 +80,7 @@ def create_app(service: OpsService | None = None) -> FastAPI:
     def metrics() -> dict[str, object]:
         return compute_metrics(svc.all_audit())
 
-    @app.post("/requests", status_code=201, response_model=WorkflowView)
+    @app.post("/requests", status_code=201, response_model=WorkflowView, dependencies=guarded)
     def submit(body: SubmitBody) -> WorkflowView:
         return svc.submit(text=body.text, user=body.user, source=body.source)
 
@@ -76,13 +89,17 @@ def create_app(service: OpsService | None = None) -> FastAPI:
         return svc.get(workflow_id)
 
     @app.post(
-        "/workflows/{workflow_id}/approvals/{approval_id}/approve", response_model=WorkflowView
+        "/workflows/{workflow_id}/approvals/{approval_id}/approve",
+        response_model=WorkflowView,
+        dependencies=guarded,
     )
     def approve(workflow_id: str, approval_id: str, body: DecisionBody) -> WorkflowView:
         return svc.approve(workflow_id, approval_id, actor=body.actor, reason=body.reason)
 
     @app.post(
-        "/workflows/{workflow_id}/approvals/{approval_id}/reject", response_model=WorkflowView
+        "/workflows/{workflow_id}/approvals/{approval_id}/reject",
+        response_model=WorkflowView,
+        dependencies=guarded,
     )
     def reject(workflow_id: str, approval_id: str, body: DecisionBody) -> WorkflowView:
         return svc.reject(workflow_id, approval_id, actor=body.actor, reason=body.reason)

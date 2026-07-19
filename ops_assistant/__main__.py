@@ -16,7 +16,7 @@ def main() -> None:  # pragma: no cover - server entrypoint
     from ops_assistant.factory import service_from_settings
 
     settings = get_settings()
-    application = create_app(service_from_settings(settings))
+    application = create_app(service_from_settings(settings), api_key=settings.api_key)
     uvicorn.run(application, host=settings.host, port=settings.port)
 
 
