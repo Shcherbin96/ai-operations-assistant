@@ -1,0 +1,215 @@
+"""Telegram bot logic, driven through a fake transport (no network, no token)."""
+
+from dataclasses import dataclass, field
+
+from ops_assistant.service import OpsService
+from ops_assistant.telegram.bot import Button, TelegramBot
+
+
+@dataclass
+class _Sent:
+    chat_id: int
+    text: str
+    buttons: list[list[Button]] | None
+
+
+@dataclass
+class _Edit:
+    chat_id: int
+    message_id: int
+    text: str
+    buttons: list[list[Button]] | None
+
+
+@dataclass
+class FakeTransport:
+    sent: list[_Sent] = field(default_factory=list)
+    edits: list[_Edit] = field(default_factory=list)
+    answered: list[tuple[str, str]] = field(default_factory=list)
+
+    def send_message(
+        self, chat_id: int, text: str, buttons: list[list[Button]] | None = None
+    ) -> None:
+        self.sent.append(_Sent(chat_id, text, buttons))
+
+    def edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        buttons: list[list[Button]] | None = None,
+    ) -> None:
+        self.edits.append(_Edit(chat_id, message_id, text, buttons))
+
+    def answer_callback(self, callback_id: str, text: str) -> None:
+        self.answered.append((callback_id, text))
+
+
+def _bot(**kw: object) -> tuple[TelegramBot, FakeTransport]:
+    tx = FakeTransport()
+    return TelegramBot(OpsService(), tx, **kw), tx  # type: ignore[arg-type]
+
+
+def _msg(bot: TelegramBot, text: str, user_id: int = 1) -> None:
+    bot.handle_message(chat_id=100, user_id=user_id, user_name="roman", text=text)
+
+
+def test_start_sends_a_welcome() -> None:
+    bot, tx = _bot()
+    _msg(bot, "/start")
+    assert len(tx.sent) == 1
+    assert tx.sent[0].buttons is None
+    assert "assistant" in tx.sent[0].text.lower()
+
+
+def test_read_only_request_replies_completed_without_buttons() -> None:
+    bot, tx = _bot()
+    _msg(bot, "find free time")
+    assert len(tx.sent) == 1
+    assert "completed" in tx.sent[0].text.lower()
+    assert tx.sent[0].buttons is None
+
+
+def test_send_request_shows_approve_and_reject_buttons() -> None:
+    bot, tx = _bot()
+    _msg(bot, "send an email to anna@example.com")
+    buttons = tx.sent[0].buttons
+    assert buttons is not None
+    labels = [b.label for row in buttons for b in row]
+    assert any("approve" in label.lower() for label in labels)
+    assert any("reject" in label.lower() for label in labels)
+
+
+def test_approve_callback_executes_and_edits_the_message() -> None:
+    bot, tx = _bot()
+    _msg(bot, "send an email to anna@example.com")
+    approve_data = tx.sent[0].buttons[0][0].callback_data  # type: ignore[index]
+
+    bot.handle_callback(
+        callback_id="cb1",
+        chat_id=100,
+        message_id=55,
+        user_id=1,
+        user_name="roman",
+        data=approve_data,
+    )
+    assert len(tx.edits) == 1
+    assert "completed" in tx.edits[0].text.lower()
+    assert tx.answered == [("cb1", "Approved")]
+
+
+def test_reject_callback_edits_to_rejected() -> None:
+    bot, tx = _bot()
+    _msg(bot, "send an email to anna@example.com")
+    reject_data = tx.sent[0].buttons[0][1].callback_data  # type: ignore[index]
+
+    bot.handle_callback(
+        callback_id="cb2",
+        chat_id=100,
+        message_id=55,
+        user_id=1,
+        user_name="roman",
+        data=reject_data,
+    )
+    assert "rejected" in tx.edits[0].text.lower()
+    assert tx.answered == [("cb2", "Rejected")]
+
+
+def test_callback_on_already_decided_approval_is_handled_gracefully() -> None:
+    bot, tx = _bot()
+    _msg(bot, "send an email to anna@example.com")
+    data = tx.sent[0].buttons[0][0].callback_data  # type: ignore[index]
+    common = dict(callback_id="cb", chat_id=100, message_id=55, user_id=1, user_name="roman")
+    bot.handle_callback(data=data, **common)  # type: ignore[arg-type]
+    bot.handle_callback(data=data, **common)  # type: ignore[arg-type]  # second time: workflow done
+    # No crash; the second callback answered with an explanatory toast, not "Approved".
+    assert tx.answered[-1][0] == "cb"
+    assert tx.answered[-1][1] != "Approved"
+
+
+def test_unknown_callback_action_is_ignored_safely() -> None:
+    bot, tx = _bot()
+    bot.handle_callback(
+        callback_id="cbx", chat_id=100, message_id=1, user_id=1, user_name="roman", data="zz:abc"
+    )
+    assert tx.answered and tx.answered[0][0] == "cbx"
+    assert not tx.edits
+
+
+def test_clarification_request_is_reported() -> None:
+    bot, tx = _bot()
+    _msg(bot, "send an update")  # no recipient -> clarification
+    assert "?" in tx.sent[0].text
+
+
+def test_dispatch_routes_a_message_update() -> None:
+    bot, tx = _bot()
+    from ops_assistant.telegram.runner import dispatch_update
+
+    dispatch_update(
+        bot,
+        {
+            "update_id": 1,
+            "message": {
+                "text": "find free time",
+                "chat": {"id": 100},
+                "from": {"id": 7, "username": "roman"},
+            },
+        },
+    )
+    assert len(tx.sent) == 1
+    assert "completed" in tx.sent[0].text.lower()
+
+
+def test_dispatch_routes_a_callback_update() -> None:
+    bot, tx = _bot()
+    from ops_assistant.telegram.runner import dispatch_update
+
+    _msg(bot, "send an email to anna@example.com")
+    data = tx.sent[0].buttons[0][0].callback_data  # type: ignore[index]
+    dispatch_update(
+        bot,
+        {
+            "update_id": 2,
+            "callback_query": {
+                "id": "cbz",
+                "data": data,
+                "from": {"id": 7, "username": "roman"},
+                "message": {"message_id": 9, "chat": {"id": 100}},
+            },
+        },
+    )
+    assert len(tx.edits) == 1
+    assert tx.answered == [("cbz", "Approved")]
+
+
+def test_dispatch_ignores_non_text_and_malformed_updates() -> None:
+    bot, tx = _bot()
+    from ops_assistant.telegram.runner import dispatch_update
+
+    dispatch_update(
+        bot, {"message": {"chat": {"id": 1}, "from": {"id": 2}}}
+    )  # no text (e.g. photo)
+    dispatch_update(bot, {"message": {"text": "hi"}})  # missing chat/from
+    dispatch_update(bot, {"callback_query": {"id": "x"}})  # missing message/from
+    dispatch_update(bot, {"edited_message": {"text": "hi"}})  # update type we don't handle
+    assert tx.sent == [] and tx.edits == [] and tx.answered == []
+
+
+def test_allowlist_blocks_unlisted_users() -> None:
+    bot, tx = _bot(allowed_users=frozenset({999}))
+    _msg(bot, "find free time", user_id=1)  # not in allowlist
+    assert len(tx.sent) == 1
+    assert "authorized" in tx.sent[0].text.lower()
+    # and a listed user is served
+    bot.handle_message(chat_id=100, user_id=999, user_name="roman", text="find free time")
+    assert "completed" in tx.sent[1].text.lower()
+
+
+def test_allowlist_blocks_callback_from_unlisted_user() -> None:
+    bot, tx = _bot(allowed_users=frozenset({999}))
+    bot.handle_callback(
+        callback_id="cb", chat_id=100, message_id=1, user_id=1, user_name="x", data="a:abc"
+    )
+    assert tx.answered and "authorized" in tx.answered[0][1].lower()
+    assert not tx.edits

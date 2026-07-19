@@ -236,6 +236,21 @@ class OpsService:
             self._workflows.save(wf)
             return self._view(wf)
 
+    def approve_pending(
+        self, approval_id: str, *, actor: str, reason: str | None = None
+    ) -> WorkflowView:
+        """Approve by approval id alone, resolving its workflow (used by callbacks)."""
+        with self._lock:
+            approval = self._approvals.get(approval_id)  # ApprovalNotFoundError if missing
+            return self.approve(approval.workflow_id, approval_id, actor=actor, reason=reason)
+
+    def reject_pending(
+        self, approval_id: str, *, actor: str, reason: str | None = None
+    ) -> WorkflowView:
+        with self._lock:
+            approval = self._approvals.get(approval_id)
+            return self.reject(approval.workflow_id, approval_id, actor=actor, reason=reason)
+
     def _guard_decision(self, workflow_id: str, approval_id: str) -> _Workflow:
         """Fetch the workflow and verify a decision is legal *before* any mutation.
 

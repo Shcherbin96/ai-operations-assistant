@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "fastapi>=0.115",       # API layer
+    "httpx>=0.27",          # Telegram Bot API client
     "psycopg[binary]>=3.2",
     "pydantic>=2.9",        # strict data contracts everywhere
     "pydantic-settings>=2.5", # env-driven config
@@ -22,8 +23,7 @@ dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.8",
-    "httpx>=0.27",          # FastAPI TestClient transport
-    "httpx2>=2.7.0",
+    "httpx2>=2.7.0",        # FastAPI TestClient transport
     "testcontainers>=4.0",
 ]
 
@@ -48,9 +48,10 @@ markers = [
 
 [tool.coverage.run]
 omit = [
-    "ops_assistant/__main__.py",       # server entrypoint, exercised by running
-    "ops_assistant/persistence/*",     # covered by the integration suite (needs Postgres)
-    "ops_assistant/factory.py",        # Postgres wiring, covered by the integration suite
+    "ops_assistant/__main__.py",           # server entrypoint, exercised by running
+    "ops_assistant/persistence/*",         # covered by the integration suite (needs Postgres)
+    "ops_assistant/factory.py",            # Postgres wiring, covered by the integration suite
+    "ops_assistant/telegram/__main__.py",  # bot entrypoint
 ]
 
 [tool.coverage.report]

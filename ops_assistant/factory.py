@@ -13,12 +13,14 @@ from typing import Any
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
+from ops_assistant.config import Settings
 from ops_assistant.persistence.postgres import (
     PostgresApprovalStore,
     PostgresAuditStore,
     PostgresIdempotencyStore,
     PostgresWorkflowStore,
 )
+from ops_assistant.persistence.schema import create_schema
 from ops_assistant.service import OpsService, _utcnow
 
 
@@ -41,3 +43,12 @@ def make_postgres_service(
         idempotency_store=PostgresIdempotencyStore(engine, clock),
         **kwargs,
     )
+
+
+def service_from_settings(settings: Settings) -> OpsService:  # pragma: no cover - wiring
+    """Build a Postgres-backed service if OPS_DATABASE_URL is set, else in-memory."""
+    if settings.database_url:
+        engine = build_engine(settings.database_url)
+        create_schema(engine)
+        return make_postgres_service(engine)
+    return OpsService()

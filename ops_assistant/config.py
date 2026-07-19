@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     approval_ttl_seconds: int = 3600
     # Postgres DSN. Unset -> the app runs fully in-memory (keyless demo).
     database_url: str | None = None
+    # Telegram bot token (from @BotFather). Unset -> the Telegram bot is disabled.
+    telegram_token: str | None = None
+    # Optional allowlist of Telegram user ids (comma-separated). Empty -> open (demo).
+    telegram_allowed_users: str = ""
 
 
 @lru_cache
