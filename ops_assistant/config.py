@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    # Knowledge base directory (markdown). Adds the knowledge.search tool if non-empty.
+    knowledge_dir: str = "knowledge_base"
 
 
 @lru_cache

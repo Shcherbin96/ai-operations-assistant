@@ -95,6 +95,10 @@ def test_format_output_renders_every_shape() -> None:
     assert "09:00 → 10:00" in _format_output([{"start": "09:00", "end": "10:00"}])
     assert "and 3 more" in _format_output([{"x": i} for i in range(8)])
     assert "draft_id: d1" in _format_output({"draft_id": "d1", "to": "a@b.c"})
+    cited = _format_output(
+        [{"source": "returns.md", "text": "Returns within 30 days", "section": "R"}]
+    )
+    assert "returns.md — Returns within 30 days" in cited
     assert _format_output("done") == "   done"
     assert "plain" in _format_output(["plain"])
 

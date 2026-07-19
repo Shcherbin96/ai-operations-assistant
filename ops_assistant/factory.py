@@ -61,6 +61,13 @@ def service_from_settings(settings: Settings) -> OpsService:  # pragma: no cover
     if registry is None:
         registry = build_sandbox_registry()
 
+    from ops_assistant.knowledge.base import KnowledgeBase
+    from ops_assistant.knowledge.tools import build_knowledge_tool
+
+    kb = KnowledgeBase.from_directory(settings.knowledge_dir)
+    if kb.chunks:
+        registry.register(build_knowledge_tool(kb))
+
     planner = None
     if settings.llm_api_key and settings.llm_model:
         from ops_assistant.planner.llm import LLMPlanner

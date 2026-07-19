@@ -13,15 +13,14 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: Stages 1–3 complete; Stage 4 (Gmail/Calendar) code-complete, pending live auth.**
-> The full control loop runs keyless (plan → server-side validation → auto-execute read-only →
-> gate side-effects behind approval → execute → append-only audit); all state persists in
-> **Postgres** behind the same interface (a paused workflow survives a restart); and a
-> **Telegram bot** drives it end-to-end. Stage 4 adds real **Gmail/Calendar** tools under the
-> same names and risk tiers as the sandbox (only the handlers change) plus an OAuth flow — the
-> tool layer is unit-tested; the live Google path awaits a one-time consent. 141 unit tests
-> (100% coverage, strict mypy, 3-OS CI) plus 10 integration tests. Stages 5–8 (n8n, RAG, evals,
-> packaging) are still ahead — this section always tells the truth about what works.
+> ✅ **Status: control loop + persistence + Telegram + Gmail/Calendar + LLM planner + RAG — all
+> live.** A plain-language request → an **LLM produces a structured plan** → the server re-derives
+> risk and gates side-effects behind approval → executes → append-only audit. State persists in
+> **Postgres** (a paused workflow survives a restart); a **Telegram bot** drives it end-to-end
+> against real **Gmail/Calendar** (verified live); and a **knowledge base** (`knowledge.search`)
+> answers policy questions with citations. 173 unit tests (100% coverage, strict mypy, 3-OS CI)
+> plus 10 integration tests. Still ahead: n8n, evals/observability, packaging + `v1.0.0`. This
+> section always tells the truth about what works.
 
 ---
 
@@ -143,7 +142,7 @@ so the project delivers value continuously instead of becoming a never-ending pl
       (drafts, event holds; send / invite only after approval).
 - [ ] **Stage 5 — n8n gateway.** Signed webhooks, workflow allowlist, schema validation,
       execution status, audit logging.
-- [ ] **Stage 6 — RAG.** Corporate policy retrieval with citations, source snapshots,
+- [x] **Stage 6 — RAG.** Corporate policy retrieval with citations, source snapshots,
       permission filters.
 - [ ] **Stage 7 — Evals & observability.** Golden dataset, planner evals, scheduled live
       evals, regression gate, latency / tokens / cost / tool-success dashboards.

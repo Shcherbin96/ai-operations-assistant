@@ -67,6 +67,8 @@ def _summarize_item(item: object) -> str:
             return f"{item['title']} ({item['start']})"
         if "start" in item and "end" in item:
             return f"{item['start']} → {item['end']}"
+        if "source" in item and "text" in item:
+            return f"{item['source']} — {item['text']}"  # a cited knowledge snippet
         parts = [f"{k}: {v}" for k, v in item.items() if k not in ("answered", "id")]
         return ", ".join(parts) if parts else str(item)
     return str(item)
