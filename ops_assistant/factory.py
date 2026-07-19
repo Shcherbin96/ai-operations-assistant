@@ -22,6 +22,7 @@ from ops_assistant.persistence.postgres import (
 )
 from ops_assistant.persistence.schema import create_schema
 from ops_assistant.service import OpsService, _utcnow
+from ops_assistant.tools.sandbox import build_sandbox_registry
 
 
 def build_engine(database_url: str) -> Engine:
@@ -57,9 +58,24 @@ def service_from_settings(settings: Settings) -> OpsService:  # pragma: no cover
         creds = load_credentials(settings.google_client_secrets, settings.google_token_path)
         if creds is not None:
             registry = build_live_registry(creds)
+    if registry is None:
+        registry = build_sandbox_registry()
 
+    planner = None
+    if settings.llm_api_key and settings.llm_model:
+        from ops_assistant.planner.llm import LLMPlanner
+        from ops_assistant.planner.openai_client import OpenAILLMClient
+
+        client = OpenAILLMClient(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
+        )
+        planner = LLMPlanner(client, registry)
+
+    kwargs: dict[str, Any] = {"registry": registry, "planner": planner}
     if settings.database_url:
         engine = build_engine(settings.database_url)
         create_schema(engine)
-        return make_postgres_service(engine, registry=registry)
-    return OpsService(registry=registry)
+        return make_postgres_service(engine, **kwargs)
+    return OpsService(**kwargs)
