@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -45,6 +45,40 @@ from ops_assistant.workflow import assert_step_transition, assert_workflow_trans
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+# --- Audit redaction ---------------------------------------------------------
+# The audit trail is append-only: a row written here can never be scrubbed. So we
+# record the *forensic* fields (recipient, subject, ids) — enough to answer "who
+# did this send actually go to?" — but never persist a full message body, and cap
+# any long value. The Telegram approval preview uses a separate, non-redacting
+# formatter, because informed consent means the human must see the real body.
+
+_AUDIT_REDACT_KEYS = frozenset({"body", "text", "html", "content"})
+_MAX_AUDIT_STR = 200
+
+
+def _redact_for_audit(arguments: Mapping[str, object]) -> dict[str, object]:
+    redacted: dict[str, object] = {}
+    for key, value in arguments.items():
+        if key in _AUDIT_REDACT_KEYS and isinstance(value, str):
+            redacted[key] = f"<redacted {len(value)} chars>"
+        elif isinstance(value, str) and len(value) > _MAX_AUDIT_STR:
+            redacted[key] = value[:_MAX_AUDIT_STR] + f"… (+{len(value) - _MAX_AUDIT_STR} chars)"
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _result_digest(output: object) -> object:
+    """A compact, redacted summary of a tool result for the audit log."""
+    if isinstance(output, list):
+        return {"count": len(output)}
+    if isinstance(output, Mapping):
+        return _redact_for_audit(output)
+    if isinstance(output, str) and len(output) > _MAX_AUDIT_STR:
+        return output[:_MAX_AUDIT_STR] + "…"
+    return output
 
 
 # --- Views: the read models handed back to callers and the API. ---
@@ -353,14 +387,14 @@ class OpsService:
 
     def _execute_step(self, wf: _Workflow, step: _Step) -> None:
         self._set_step(wf, step, StepStatus.RUNNING)
+        arguments = resolve_references(step.validated.arguments, self._succeeded_outputs(wf))
         self._audit.append(
             wf.id,
             AuditEventType.STEP_STARTED,
             actor="executor",
             step_id=step.validated.id,
-            payload={"tool": step.validated.tool},
+            payload={"tool": step.validated.tool, "arguments": _redact_for_audit(arguments)},
         )
-        arguments = resolve_references(step.validated.arguments, self._succeeded_outputs(wf))
         try:
             result = self._gateway.execute(
                 wf.id,
@@ -387,16 +421,24 @@ class OpsService:
             AuditEventType.STEP_SUCCEEDED,
             actor="executor",
             step_id=step.validated.id,
-            payload={"tool": step.validated.tool},
+            payload={"tool": step.validated.tool, "result": _result_digest(result.output)},
         )
 
     def _request_approval(self, wf: _Workflow, step: _Step) -> None:
+        # Resolve ``{{step.field}}`` references now so the approval — and every
+        # surface that renders it — shows the *real* recipient/body, not a
+        # placeholder. Policy guarantees every reference is a declared dependency,
+        # and a step is only ready for approval once its deps have succeeded, so
+        # this resolves against exactly the frozen outputs the executor will use:
+        # what the human approves is what runs. (The plan-bound fingerprint already
+        # binds the action, so it needn't fold in the resolved values.)
+        arguments = resolve_references(step.validated.arguments, self._succeeded_outputs(wf))
         approval = self._approvals.request(
             workflow_id=wf.id,
             step_id=step.validated.id,
             plan_fingerprint=wf.plan_fingerprint,
             tool=step.validated.tool,
-            arguments=step.validated.arguments,
+            arguments=arguments,
             risk=step.validated.resolved_risk.value,
             ttl=self._ttl,
         )
@@ -411,6 +453,7 @@ class OpsService:
                 "tool": step.validated.tool,
                 "approval_id": approval.id,
                 "risk": step.validated.resolved_risk.value,
+                "arguments": _redact_for_audit(arguments),
             },
         )
 

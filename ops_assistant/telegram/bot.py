@@ -11,6 +11,7 @@ so tests drive it with a fake and the live client is a thin adapter.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -75,6 +76,20 @@ def _summarize_item(item: object) -> str:
         parts = [f"{k}: {v}" for k, v in item.items() if k not in ("answered", "id")]
         return ", ".join(parts) if parts else str(item)
     return str(item)
+
+
+def _format_arguments(arguments: Mapping[str, object]) -> str:
+    """What a pending action will actually do — the real values, shown to the
+    approver so they can consent to the concrete recipient/body, not just a tool
+    name. Long values are truncated for readability (not redacted): informed
+    consent means seeing what is sent."""
+    parts = []
+    for key, value in arguments.items():
+        text = str(value)
+        if len(text) > 140:
+            text = text[:140] + "…"
+        parts.append(f"{key}: {text}")
+    return "   ↳ " + " · ".join(parts) if parts else ""
 
 
 def _format_output(output: object) -> str:
@@ -165,6 +180,7 @@ class TelegramBot:
             lines.append("")
             lines.append(f"❓ {view.clarification_question}")
 
+        approval_by_step = {a.step_id: a for a in view.pending_approvals}
         for step in view.steps:
             emoji = _STATUS_EMOJI.get(step.status, "•")
             lines.append(f"{emoji} {step.tool} [{step.resolved_risk.value}] — {step.status.value}")
@@ -172,6 +188,14 @@ class TelegramBot:
                 detail = _format_output(step.output)
                 if detail:
                     lines.append(detail)
+            elif step.status is StepStatus.AWAITING_APPROVAL:
+                # Show the resolved arguments so the human sees exactly what they
+                # are approving — the real recipient/body, not just the tool name.
+                approval = approval_by_step.get(step.id)
+                if approval is not None:
+                    detail = _format_arguments(approval.arguments)
+                    if detail:
+                        lines.append(detail)
 
         buttons: list[list[Button]] | None = None
         if view.pending_approvals:

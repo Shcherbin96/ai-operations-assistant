@@ -1,6 +1,6 @@
 """Inter-step data-flow: resolve {{step.field}} references from earlier outputs."""
 
-from ops_assistant.dataflow import resolve_references
+from ops_assistant.dataflow import referenced_steps, resolve_references
 
 
 def test_full_reference_is_replaced_with_the_value() -> None:
@@ -52,3 +52,16 @@ def test_non_reference_and_nested_values_are_preserved() -> None:
     assert out["n"] == 5
     assert out["nested"] == {"to": "a@b.c"}
     assert out["list"] == ["a@b.c", 1]
+
+
+def test_referenced_steps_finds_every_id_across_nested_structures() -> None:
+    args = {
+        "to": "{{s1.from}}",
+        "cc": ["{{s2.x}}", "static@example.com"],
+        "meta": {"note": "see {{s1.subject}} and {{s3}}"},
+    }
+    assert referenced_steps(args) == {"s1", "s2", "s3"}
+
+
+def test_referenced_steps_is_empty_without_references() -> None:
+    assert referenced_steps({"to": "anna@example.com", "n": 5, "list": ["a", 1]}) == set()

@@ -168,3 +168,37 @@ def test_draft_is_auto_by_default_but_gateable_by_policy() -> None:
         )
     )
     assert _engine(strict).validate(plan).steps[0].decision is ApprovalDecision.REQUIRES_APPROVAL
+
+
+# --- data-flow references must declare their dependency ---
+
+
+def test_reference_to_an_undeclared_step_is_rejected() -> None:
+    # A step may only reference an output it declared a dependency on — otherwise
+    # the approval preview (which resolves against declared deps) could differ from
+    # what actually executes.
+    plan = Plan(
+        summary="sneaky",
+        steps=[
+            PlanStep(id="s1", tool="email.search", arguments={"query": "all"}),
+            PlanStep(id="s2", tool="email.send", arguments={"to": "{{s1.from}}"}),  # no depends_on
+        ],
+    )
+    with pytest.raises(PlanValidationError):
+        _engine().validate(plan)
+
+
+def test_reference_to_a_declared_dependency_is_accepted() -> None:
+    plan = Plan(
+        summary="reply",
+        steps=[
+            PlanStep(id="s1", tool="email.search", arguments={"query": "all"}),
+            PlanStep(
+                id="s2",
+                tool="email.send",
+                arguments={"to": "{{s1.from}}"},
+                depends_on=["s1"],
+            ),
+        ],
+    )
+    assert [s.tool for s in _engine().validate(plan).steps] == ["email.search", "email.send"]

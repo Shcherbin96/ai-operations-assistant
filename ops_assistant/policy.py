@@ -18,6 +18,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ops_assistant.dataflow import referenced_steps
 from ops_assistant.errors import (
     ArgumentError,
     PlanValidationError,
@@ -93,6 +94,18 @@ class PolicyEngine:
             for dep in step.depends_on:
                 if dep not in known_ids:
                     raise PlanValidationError(f"step {step.id} depends on unknown step '{dep}'")
+            # A ``{{step.field}}`` reference may only point at a declared dependency.
+            # This keeps approval-time resolution identical to execution-time
+            # resolution (both draw on the same already-succeeded deps), so the
+            # approver always sees the value that will actually run — and it blocks
+            # an adversarial plan from pulling a value out of an undeclared step
+            # that the approval preview never resolved.
+            declared = set(step.depends_on)
+            for ref in referenced_steps(step.arguments):
+                if ref not in declared:
+                    raise PlanValidationError(
+                        f"step {step.id} references step '{ref}' without declaring it in depends_on"
+                    )
         _reject_dependency_cycles(plan)
 
         validated: list[ValidatedStep] = []

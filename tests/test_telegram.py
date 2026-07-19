@@ -113,6 +113,30 @@ def test_send_request_shows_approve_and_reject_buttons() -> None:
     assert any("reject" in label.lower() for label in labels)
 
 
+def test_format_arguments_is_empty_for_no_arguments() -> None:
+    from ops_assistant.telegram.bot import _format_arguments
+
+    assert _format_arguments({}) == ""
+
+
+def test_format_arguments_truncates_long_values() -> None:
+    from ops_assistant.telegram.bot import _format_arguments
+
+    out = _format_arguments({"to": "a@b.c", "body": "x" * 300})
+    assert "a@b.c" in out
+    assert "…" in out and "x" * 300 not in out  # long body shown but truncated
+
+
+def test_send_approval_prompt_shows_the_concrete_recipient() -> None:
+    # Informed consent: the approver must see who the email goes to, not just the
+    # tool name. The sandbox plan sends to anna@example.com.
+    bot, tx = _bot()
+    _msg(bot, "send an email to anna@example.com")
+    body = tx.sent[0].text
+    assert "anna@example.com" in body
+    assert "to:" in body.lower()
+
+
 def test_approve_callback_executes_and_edits_the_message() -> None:
     bot, tx = _bot()
     _msg(bot, "send an email to anna@example.com")
