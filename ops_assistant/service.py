@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from ops_assistant.approval import Approval, ApprovalEngine, ApprovalStore
+from ops_assistant.approval import Approval, ApprovalEngine, ApprovalStatus, ApprovalStore
 from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog, AuditStore
 from ops_assistant.dataflow import resolve_references
 from ops_assistant.errors import NotFoundError, OpsAssistantError, StateTransitionError
@@ -258,19 +258,35 @@ class OpsService:
     ) -> WorkflowView:
         with self._lock:
             wf = self._guard_decision(workflow_id, approval_id)
-            approval = self._approvals.approve(
-                approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
-            )
-            self._audit.append(
-                wf.id,
-                AuditEventType.APPROVAL_APPROVED,
-                actor=actor,
-                step_id=approval.step_id,
-                payload={"approval_id": approval_id, "tool": approval.tool},
-            )
+            existing = self._approvals.get(approval_id)
+            step = self._step(wf, existing.step_id)
+            if (
+                existing.status is ApprovalStatus.APPROVED
+                and step.status is StepStatus.AWAITING_APPROVAL
+            ):
+                # Recovery. A previous approve consumed the approval (its compare-and-set
+                # succeeded) but then failed to persist the workflow — the save lost an
+                # optimistic-lock race, or the process died mid-approve. Without this,
+                # the retry would wedge forever on ApprovalAlreadyDecided. Re-drive
+                # execution instead: the tool gateway is idempotent, so a step that
+                # already ran replays its result rather than firing again. (The re-run
+                # re-appends STEP_* audit events — a faithful record of the second
+                # attempt; the external side-effect still happens exactly once.)
+                approval = existing
+            else:
+                approval = self._approvals.approve(
+                    approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
+                )
+                self._audit.append(
+                    wf.id,
+                    AuditEventType.APPROVAL_APPROVED,
+                    actor=actor,
+                    step_id=approval.step_id,
+                    payload={"approval_id": approval_id, "tool": approval.tool},
+                )
             self._to(wf, WorkflowStatus.APPROVED)
             self._ensure_executing(wf)
-            self._execute_step(wf, self._step(wf, approval.step_id))
+            self._execute_step(wf, step)
             self._run(wf)
             self._workflows.save(wf)
             return self._view(wf)

@@ -273,6 +273,67 @@ def test_reference_without_a_declared_dependency_is_refused() -> None:
         svc.submit(text="reply", user="roman", source="test")
 
 
+def test_approve_recovers_from_a_mid_approve_save_failure_without_refiring() -> None:
+    import copy
+
+    from ops_assistant.errors import ConflictError
+    from ops_assistant.state import WorkflowRecord
+
+    calls = {"n": 0}
+
+    def _send(args: object) -> object:
+        calls["n"] += 1
+        return {"message_id": "m1", "status": "sent"}
+
+    registry = build_sandbox_registry()
+    registry.register(ToolSpec("test.send", RiskTier.EXTERNAL_SIDE_EFFECT, "counting send", _send))
+
+    class _P:
+        def plan(self, request: OperationRequest) -> Plan:
+            return Plan(summary="x", steps=[PlanStep(id="s1", tool="test.send", arguments={})])
+
+    class _FlakyStore:
+        """Postgres-like: get/save copy the record (so a failed save doesn't persist),
+        and the next save after arming raises once — simulating an optimistic-lock
+        conflict or a crash between the approval CAS and the workflow save."""
+
+        def __init__(self) -> None:
+            self._data: dict[str, WorkflowRecord] = {}
+            self.fail_next_save = False
+
+        def create(self, workflow: WorkflowRecord) -> None:
+            self._data[workflow.id] = copy.deepcopy(workflow)
+
+        def get(self, workflow_id: str) -> WorkflowRecord | None:
+            wf = self._data.get(workflow_id)
+            return copy.deepcopy(wf) if wf is not None else None
+
+        def save(self, workflow: WorkflowRecord) -> None:
+            if self.fail_next_save:
+                self.fail_next_save = False
+                raise ConflictError("simulated mid-approve save failure")
+            self._data[workflow.id] = copy.deepcopy(workflow)
+
+    store = _FlakyStore()
+    svc = _service(planner=_P(), registry=registry, store=store)
+    view = svc.submit(text="go", user="u", source="test")
+    assert view.status is WorkflowStatus.AWAITING_APPROVAL
+    approval_id = view.pending_approvals[0].id
+
+    # Attempt 1: the approval CAS commits, then the workflow save fails -> wedge
+    # (approval APPROVED, workflow still AWAITING_APPROVAL). The side-effect fired.
+    store.fail_next_save = True
+    with pytest.raises(ConflictError):
+        svc.approve(view.id, approval_id, actor="u")
+    assert calls["n"] == 1
+
+    # Attempt 2: recovers instead of raising ApprovalAlreadyDecided, and the
+    # idempotent gateway replays the completed step rather than firing it again.
+    recovered = svc.approve(view.id, approval_id, actor="u")
+    assert recovered.status is WorkflowStatus.COMPLETED
+    assert calls["n"] == 1  # exactly once, total
+
+
 def test_deployment_tool_allowlist_refuses_off_list_tools() -> None:
     from ops_assistant.errors import ToolNotAllowedError
 
