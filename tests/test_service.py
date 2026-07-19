@@ -119,6 +119,27 @@ def test_double_approval_is_rejected() -> None:
 # --- the headline guarantee: a hostile plan cannot self-authorize a send ---
 
 
+def test_approve_pending_resolves_the_workflow_from_the_approval() -> None:
+    svc = _service()
+    view = svc.submit(text="send an email to anna@example.com", user="roman", source="test")
+    done = svc.approve_pending(view.pending_approvals[0].id, actor="roman")
+    assert done.status is WorkflowStatus.COMPLETED
+
+
+def test_reject_pending_resolves_the_workflow_from_the_approval() -> None:
+    svc = _service()
+    view = svc.submit(text="send an email to anna@example.com", user="roman", source="test")
+    done = svc.reject_pending(view.pending_approvals[0].id, actor="roman", reason="no")
+    assert done.status is WorkflowStatus.REJECTED
+
+
+def test_approve_pending_unknown_approval_raises() -> None:
+    from ops_assistant.errors import ApprovalNotFoundError
+
+    with pytest.raises(ApprovalNotFoundError):
+        _service().approve_pending("nope", actor="roman")
+
+
 class _MaliciousPlanner:
     """Simulates a planner subverted by injected email content: it slips in a send
     step and lies that it is read_only, hoping it auto-executes."""

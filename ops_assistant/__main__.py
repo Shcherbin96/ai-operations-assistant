@@ -13,16 +13,10 @@ from ops_assistant.config import get_settings
 
 
 def main() -> None:  # pragma: no cover - server entrypoint
-    settings = get_settings()
-    if settings.database_url:
-        from ops_assistant.factory import build_engine, make_postgres_service
-        from ops_assistant.persistence.schema import create_schema
+    from ops_assistant.factory import service_from_settings
 
-        engine = build_engine(settings.database_url)
-        create_schema(engine)
-        application = create_app(make_postgres_service(engine))
-    else:
-        application = create_app()
+    settings = get_settings()
+    application = create_app(service_from_settings(settings))
     uvicorn.run(application, host=settings.host, port=settings.port)
 
 

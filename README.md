@@ -13,13 +13,13 @@ in an append-only audit trail.
 The interesting part of an AI agent is not that it *can* call Gmail or Calendar. It is that
 it does so **under control** — the model never holds authority it can grant itself.
 
-> ✅ **Status: Stages 1–2 complete.** The full control loop runs keyless (plan → server-side
+> ✅ **Status: Stages 1–3 complete.** The full control loop runs keyless (plan → server-side
 > validation → auto-execute read-only → gate side-effects behind approval → execute →
-> append-only audit), and all state now persists in **Postgres** behind the same interface,
-> so a paused workflow survives a restart. 105 unit tests (100% coverage, strict mypy, 3-OS
-> CI) plus 5 integration tests against a real database. Stages 3–8 (Telegram, real
-> Gmail/Calendar, n8n, RAG, evals, packaging) are still ahead — this section always tells the
-> truth about what actually works.
+> append-only audit); all state persists in **Postgres** behind the same interface (a paused
+> workflow survives a restart); and a **Telegram bot** drives it end-to-end — send a request,
+> get the plan, tap Approve/Reject. 122 unit tests (100% coverage, strict mypy, 3-OS CI) plus
+> 10 integration tests against a real database. Stages 4–8 (real Gmail/Calendar, n8n, RAG,
+> evals, packaging) are still ahead — this section always tells the truth about what works.
 
 ---
 
@@ -134,8 +134,9 @@ so the project delivers value continuously instead of becoming a never-ending pl
       sandbox tools, append-only audit, unit tests, CI. *A fully working demo with zero keys.*
 - [x] **Stage 2 — Persistence.** Postgres for workflows, steps, approvals, audit events,
       tool executions, idempotency keys, optimistic locking. *State survives restart.*
-- [ ] **Stage 3 — Telegram.** Create a request, see the plan, Approve/Reject buttons,
-      notifications, recent-workflow history.
+- [x] **Stage 3 — Telegram.** Create a request, see the plan, Approve/Reject buttons.
+      Bot logic is transport-agnostic and fully unit-tested; a long-polling client
+      drives it live.
 - [ ] **Stage 4 — Gmail & Calendar.** Real read-only operations, then gated writes
       (drafts, event holds; send / invite only after approval).
 - [ ] **Stage 5 — n8n gateway.** Signed webhooks, workflow allowlist, schema validation,
@@ -193,11 +194,28 @@ the audit table is append-only (a DB trigger rejects UPDATE/DELETE), idempotency
 is an `ON CONFLICT` insert, and concurrent writes are caught by an optimistic
 `version` column.
 
+### Telegram bot
+
+Talk to the assistant from your phone. Get a token from
+[@BotFather](https://t.me/BotFather), then:
+
+```bash
+export OPS_TELEGRAM_TOKEN=123456:your-token-here
+# optional: restrict to specific Telegram user ids
+export OPS_TELEGRAM_ALLOWED_USERS=11111111,22222222
+uv run python -m ops_assistant.telegram   # long-polls; message the bot to try it
+```
+
+Send *"send an email to anna@example.com"* and the bot replies with the plan and
+**Approve / Reject** buttons; tapping one runs (or declines) the gated step and edits
+the message with the outcome. The bot logic is transport-agnostic, so it is fully
+unit-tested without a token or network.
+
 ### Development
 
 ```bash
-uv run pytest -v                                   # 105 unit tests (no Docker needed)
-uv run pytest -m integration -o addopts=""         # 5 Postgres tests (needs Docker)
+uv run pytest -v                                   # 122 unit tests (no Docker needed)
+uv run pytest -m integration -o addopts=""         # 10 Postgres tests (needs Docker)
 uv run pytest --cov=ops_assistant --cov-report=term-missing
 uv run ruff check . && uv run ruff format --check . && uv run mypy ops_assistant scripts
 ```
