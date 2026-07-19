@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 import pytest
 
 from ops_assistant.audit import AuditEventType
-from ops_assistant.errors import ApprovalAlreadyDecidedError
 from ops_assistant.models import (
     OperationRequest,
     Plan,
@@ -105,11 +104,15 @@ def test_rejecting_the_send_completes_as_rejected_without_sending() -> None:
 
 
 def test_double_approval_is_rejected() -> None:
+    # After the single gated step runs, the workflow is completed, so a second
+    # approve is refused by the workflow-state guard before touching the approval.
+    from ops_assistant.errors import StateTransitionError
+
     svc = _service()
     view = svc.submit(text="send an email to anna@example.com", user="roman", source="test")
     approval_id = view.pending_approvals[0].id
     svc.approve(view.id, approval_id, actor="roman")
-    with pytest.raises(ApprovalAlreadyDecidedError):
+    with pytest.raises(StateTransitionError):
         svc.approve(view.id, approval_id, actor="roman")
 
 
@@ -207,6 +210,118 @@ def test_failing_tool_fails_the_workflow_and_is_audited() -> None:
     assert view.steps[0].status is StepStatus.FAILED
     assert view.steps[0].error
     assert AuditEventType.WORKFLOW_FAILED in [e.event_type for e in svc.audit_for(view.id)]
+
+
+class _TwoSendPlanner:
+    """Two independent external sends — the multi-approval case."""
+
+    def plan(self, request: OperationRequest) -> Plan:
+        return Plan(
+            summary="Send two emails",
+            steps=[
+                PlanStep(id="s1", tool="email.send", arguments={"to": "a@x.com"}),
+                PlanStep(id="s2", tool="email.send", arguments={"to": "b@x.com"}),
+            ],
+        )
+
+
+def test_two_gated_steps_can_both_be_approved() -> None:
+    svc = _service(planner=_TwoSendPlanner())
+    view = svc.submit(text="send two", user="roman", source="test")
+    assert view.status is WorkflowStatus.AWAITING_APPROVAL
+    assert len(view.pending_approvals) == 2
+
+    first = view.pending_approvals[0].id
+    view = svc.approve(view.id, first, actor="roman")
+    assert view.status is WorkflowStatus.AWAITING_APPROVAL  # one still pending
+    second = view.pending_approvals[0].id
+    view = svc.approve(view.id, second, actor="roman")
+    assert view.status is WorkflowStatus.COMPLETED
+    assert all(s.status is StepStatus.SUCCEEDED for s in view.steps)
+
+
+def test_rejecting_one_gated_step_rejects_workflow_and_cancels_the_sibling() -> None:
+    svc = _service(planner=_TwoSendPlanner())
+    view = svc.submit(text="send two", user="roman", source="test")
+    reject_id = view.pending_approvals[0].id
+    view = svc.reject(view.id, reject_id, actor="roman", reason="no")
+
+    assert view.status is WorkflowStatus.REJECTED
+    assert view.pending_approvals == []  # sibling approval was cancelled
+    statuses = {s.status for s in view.steps}
+    assert StepStatus.REJECTED in statuses
+    assert StepStatus.SKIPPED in statuses
+    # nothing was sent
+    sent = [e for e in svc.audit_for(view.id) if e.event_type is AuditEventType.TOOL_SUCCEEDED]
+    assert sent == []
+
+
+def test_deciding_a_sibling_after_rejection_raises_without_corrupting_state() -> None:
+    from ops_assistant.errors import StateTransitionError
+
+    svc = _service(planner=_TwoSendPlanner())
+    view = svc.submit(text="send two", user="roman", source="test")
+    all_ids = [a.id for a in view.pending_approvals]
+    svc.reject(view.id, all_ids[0], actor="roman")
+
+    # The sibling approval is gone from the workflow's live set; approving it must
+    # fail on the terminal-workflow guard BEFORE any mutation or audit write.
+    with pytest.raises(StateTransitionError):
+        svc.approve(view.id, all_ids[1], actor="roman")
+
+    events = [e.event_type for e in svc.audit_for(view.id)]
+    assert AuditEventType.APPROVAL_APPROVED not in events  # no phantom attestation
+    sent = [e for e in svc.audit_for(view.id) if e.event_type is AuditEventType.TOOL_SUCCEEDED]
+    assert sent == []
+
+
+def test_approval_must_belong_to_the_target_workflow() -> None:
+    from ops_assistant.errors import NotFoundError
+
+    svc = _service()
+    a = svc.submit(text="send an email to anna@example.com", user="roman", source="test")
+    b = svc.submit(text="send an email to bob@example.com", user="roman", source="test")
+    a_approval = a.pending_approvals[0].id
+
+    with pytest.raises(NotFoundError):
+        svc.approve(b.id, a_approval, actor="roman")  # a's approval, b's workflow
+
+
+def test_concurrent_approval_executes_the_tool_exactly_once() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    calls: list[int] = []
+
+    def counting_send(args: object) -> object:
+        calls.append(1)
+        return {"status": "sent"}
+
+    reg = build_sandbox_registry()
+    counted = ToolRegistry()
+    for name in reg.names():
+        spec = reg.require(name)
+        counted.register(
+            ToolSpec(name, spec.risk, spec.description, counting_send, spec.required_args)
+            if name == "email.send"
+            else spec
+        )
+
+    svc = _service(registry=counted)
+    view = svc.submit(text="send an email to anna@example.com", user="roman", source="test")
+    approval_id = view.pending_approvals[0].id
+
+    def worker() -> object:
+        try:
+            return ("ok", svc.approve(view.id, approval_id, actor="roman").status)
+        except Exception as exc:  # noqa: BLE001 - we assert on the type below
+            return ("err", type(exc).__name__)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [f.result() for f in [pool.submit(worker), pool.submit(worker)]]
+
+    assert sum(calls) == 1  # the external send fired exactly once
+    outcomes = sorted(r[0] for r in results)
+    assert outcomes == ["err", "ok"]  # exactly one succeeded, one was refused
 
 
 class _BadToolPlanner:

@@ -11,6 +11,7 @@ the same service interface.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ops_assistant.approval import Approval, ApprovalEngine
 from ops_assistant.audit import AuditEvent, AuditEventType, AuditLog
-from ops_assistant.errors import NotFoundError, OpsAssistantError
+from ops_assistant.errors import NotFoundError, OpsAssistantError, StateTransitionError
 from ops_assistant.gateway import ToolGateway
 from ops_assistant.models import (
     OperationRequest,
@@ -130,104 +131,141 @@ class OpsService:
         self._id_factory = id_factory
         self._ttl = approval_ttl
         self._workflows: dict[str, _Workflow] = {}
+        # Sync endpoints run in a threadpool; serialize state mutations so the
+        # check-then-act sequences (approval single-use, gateway idempotency,
+        # state transitions) are atomic. Stage 2 replaces this with DB row locks
+        # / unique constraints across processes.
+        self._lock = threading.RLock()
 
     # --- Public API ---
 
     def submit(self, *, text: str, user: str, source: str) -> WorkflowView:
-        wid = self._id_factory()
-        request = OperationRequest(id=wid, text=text, user=user, source=source)
-        wf = _Workflow(id=wid, request=request, status=WorkflowStatus.CREATED)
-        self._workflows[wid] = wf
-        self._audit.append(
-            wid, AuditEventType.REQUEST_CREATED, actor=user, payload={"source": source}
-        )
+        with self._lock:
+            wid = self._id_factory()
+            request = OperationRequest(id=wid, text=text, user=user, source=source)
+            wf = _Workflow(id=wid, request=request, status=WorkflowStatus.CREATED)
+            self._workflows[wid] = wf
+            self._audit.append(
+                wid, AuditEventType.REQUEST_CREATED, actor=user, payload={"source": source}
+            )
 
-        plan = self._planner.plan(request)
-        wf.summary = plan.summary
-        self._to(wf, WorkflowStatus.PLANNED)
-        self._audit.append(
-            wid,
-            AuditEventType.PLAN_GENERATED,
-            actor="planner",
-            payload={"summary": plan.summary, "steps": len(plan.steps)},
-        )
+            plan = self._planner.plan(request)
+            wf.summary = plan.summary
+            self._to(wf, WorkflowStatus.PLANNED)
+            self._audit.append(
+                wid,
+                AuditEventType.PLAN_GENERATED,
+                actor="planner",
+                payload={"summary": plan.summary, "steps": len(plan.steps)},
+            )
 
-        if plan.requires_clarification:
-            wf.requires_clarification = True
-            wf.clarification_question = plan.clarification_question
+            if plan.requires_clarification:
+                wf.requires_clarification = True
+                wf.clarification_question = plan.clarification_question
+                return self._view(wf)
+
+            self._to(wf, WorkflowStatus.VALIDATING)
+            try:
+                validated = self._policy.validate(plan)
+            except OpsAssistantError:
+                self._to(wf, WorkflowStatus.FAILED)
+                self._audit.append(wid, AuditEventType.WORKFLOW_FAILED, actor="policy")
+                raise
+
+            wf.plan_fingerprint = plan_fingerprint(plan)
+            self._audit.append(
+                wid,
+                AuditEventType.PLAN_VALIDATED,
+                actor="policy",
+                payload={"steps": len(validated.steps)},
+            )
+            for vs in validated.steps:
+                if vs.risk_mismatch:
+                    self._audit.append(
+                        wid,
+                        AuditEventType.RISK_MISMATCH_DETECTED,
+                        actor="policy",
+                        step_id=vs.id,
+                        payload={
+                            "tool": vs.tool,
+                            "claimed": vs.claimed_risk.value if vs.claimed_risk else None,
+                            "resolved": vs.resolved_risk.value,
+                        },
+                    )
+            wf.steps = [_Step(validated=vs) for vs in validated.steps]
+
+            self._run(wf)
             return self._view(wf)
-
-        self._to(wf, WorkflowStatus.VALIDATING)
-        try:
-            validated = self._policy.validate(plan)
-        except OpsAssistantError:
-            self._to(wf, WorkflowStatus.FAILED)
-            self._audit.append(wid, AuditEventType.WORKFLOW_FAILED, actor="policy")
-            raise
-
-        wf.plan_fingerprint = plan_fingerprint(plan)
-        self._audit.append(
-            wid,
-            AuditEventType.PLAN_VALIDATED,
-            actor="policy",
-            payload={"steps": len(validated.steps)},
-        )
-        for vs in validated.steps:
-            if vs.risk_mismatch:
-                self._audit.append(
-                    wid,
-                    AuditEventType.RISK_MISMATCH_DETECTED,
-                    actor="policy",
-                    step_id=vs.id,
-                    payload={
-                        "tool": vs.tool,
-                        "claimed": vs.claimed_risk.value if vs.claimed_risk else None,
-                        "resolved": vs.resolved_risk.value,
-                    },
-                )
-        wf.steps = [_Step(validated=vs) for vs in validated.steps]
-
-        self._run(wf)
-        return self._view(wf)
 
     def approve(
         self, workflow_id: str, approval_id: str, *, actor: str, reason: str | None = None
     ) -> WorkflowView:
-        wf = self._require(workflow_id)
-        approval = self._approvals.approve(
-            approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
-        )
-        self._audit.append(
-            wf.id,
-            AuditEventType.APPROVAL_APPROVED,
-            actor=actor,
-            step_id=approval.step_id,
-            payload={"approval_id": approval_id, "tool": approval.tool},
-        )
-        self._to(wf, WorkflowStatus.APPROVED)
-        self._ensure_executing(wf)
-        self._execute_step(wf, self._step(wf, approval.step_id))
-        self._run(wf)
-        return self._view(wf)
+        with self._lock:
+            wf = self._guard_decision(workflow_id, approval_id)
+            approval = self._approvals.approve(
+                approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
+            )
+            self._audit.append(
+                wf.id,
+                AuditEventType.APPROVAL_APPROVED,
+                actor=actor,
+                step_id=approval.step_id,
+                payload={"approval_id": approval_id, "tool": approval.tool},
+            )
+            self._to(wf, WorkflowStatus.APPROVED)
+            self._ensure_executing(wf)
+            self._execute_step(wf, self._step(wf, approval.step_id))
+            self._run(wf)
+            return self._view(wf)
 
     def reject(
         self, workflow_id: str, approval_id: str, *, actor: str, reason: str | None = None
     ) -> WorkflowView:
+        with self._lock:
+            wf = self._guard_decision(workflow_id, approval_id)
+            approval = self._approvals.reject(
+                approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
+            )
+            self._audit.append(
+                wf.id,
+                AuditEventType.APPROVAL_REJECTED,
+                actor=actor,
+                step_id=approval.step_id,
+                payload={"approval_id": approval_id, "reason": reason},
+            )
+            self._set_step(wf, self._step(wf, approval.step_id), StepStatus.REJECTED)
+            # Rejecting an action declines the proposed plan: void every sibling
+            # approval and skip its step so no live approval outlives the workflow.
+            for sibling in self._approvals.pending_for_workflow(wf.id):
+                self._approvals.cancel(sibling.id)
+                self._set_step(wf, self._step(wf, sibling.step_id), StepStatus.SKIPPED)
+                self._audit.append(
+                    wf.id,
+                    AuditEventType.STEP_SKIPPED,
+                    actor="system",
+                    step_id=sibling.step_id,
+                    payload={"reason": "another step in the plan was rejected"},
+                )
+            self._propagate_skips(wf)
+            self._to(wf, WorkflowStatus.REJECTED)
+            return self._view(wf)
+
+    def _guard_decision(self, workflow_id: str, approval_id: str) -> _Workflow:
+        """Fetch the workflow and verify a decision is legal *before* any mutation.
+
+        Confirms the approval belongs to this workflow and the workflow is still
+        awaiting approval, so a decision can never consume an approval or write an
+        audit record against a terminal or mismatched workflow.
+        """
         wf = self._require(workflow_id)
-        approval = self._approvals.reject(
-            approval_id, actor=actor, plan_fingerprint=wf.plan_fingerprint, reason=reason
-        )
-        self._audit.append(
-            wf.id,
-            AuditEventType.APPROVAL_REJECTED,
-            actor=actor,
-            step_id=approval.step_id,
-            payload={"approval_id": approval_id, "reason": reason},
-        )
-        self._set_step(wf, self._step(wf, approval.step_id), StepStatus.REJECTED)
-        self._propagate_skips(wf)
-        self._to(wf, WorkflowStatus.REJECTED)
-        return self._view(wf)
+        approval = self._approvals.get(approval_id)  # ApprovalNotFoundError if missing
+        if approval.workflow_id != workflow_id:
+            raise NotFoundError(f"approval {approval_id} does not belong to workflow {workflow_id}")
+        if wf.status is not WorkflowStatus.AWAITING_APPROVAL:
+            raise StateTransitionError(
+                f"workflow {workflow_id} is {wf.status.value}; it is not awaiting approval"
+            )
+        return wf
 
     def get(self, workflow_id: str) -> WorkflowView:
         return self._view(self._require(workflow_id))

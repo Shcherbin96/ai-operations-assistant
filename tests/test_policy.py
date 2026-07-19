@@ -133,6 +133,29 @@ def test_duplicate_step_ids_are_rejected() -> None:
         _engine().validate(plan)
 
 
+def test_cyclic_dependencies_are_rejected() -> None:
+    # A hostile/malformed plan whose steps depend on each other would never
+    # become runnable and would wedge the workflow forever. Reject at validation.
+    plan = Plan(
+        summary="s",
+        steps=[
+            PlanStep(id="1", tool="email.search", arguments={}, depends_on=["2"]),
+            PlanStep(id="2", tool="email.search", arguments={}, depends_on=["1"]),
+        ],
+    )
+    with pytest.raises(PlanValidationError):
+        _engine().validate(plan)
+
+
+def test_self_dependency_is_rejected() -> None:
+    plan = Plan(
+        summary="s",
+        steps=[PlanStep(id="1", tool="email.search", arguments={}, depends_on=["1"])],
+    )
+    with pytest.raises(PlanValidationError):
+        _engine().validate(plan)
+
+
 def test_draft_is_auto_by_default_but_gateable_by_policy() -> None:
     plan = Plan(
         summary="s", steps=[PlanStep(id="1", tool="email.create_draft", arguments={"to": "a@b.c"})]

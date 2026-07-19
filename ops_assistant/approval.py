@@ -31,6 +31,7 @@ class ApprovalStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 
 class Approval(BaseModel):
@@ -109,6 +110,17 @@ class ApprovalEngine:
         self, approval_id: str, *, actor: str, plan_fingerprint: str, reason: str | None = None
     ) -> Approval:
         return self._decide(approval_id, ApprovalStatus.REJECTED, actor, plan_fingerprint, reason)
+
+    def cancel(self, approval_id: str) -> Approval:
+        """Void a still-pending approval (e.g. a sibling of a rejected step).
+
+        Idempotent: an already-decided approval is returned unchanged.
+        """
+        approval = self.get(approval_id)
+        if approval.status is ApprovalStatus.PENDING:
+            approval = approval.model_copy(update={"status": ApprovalStatus.CANCELLED})
+            self._approvals[approval_id] = approval
+        return approval
 
     def pending_for_workflow(self, workflow_id: str) -> tuple[Approval, ...]:
         return tuple(

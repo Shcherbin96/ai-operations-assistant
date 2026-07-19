@@ -111,6 +111,22 @@ def test_changed_plan_invalidates_the_approval() -> None:
         engine.approve(aid, actor="roman", plan_fingerprint="fp-different")
 
 
+def test_cancel_marks_a_pending_approval_cancelled() -> None:
+    engine = _engine()
+    aid = _request(engine)
+    cancelled = engine.cancel(aid)
+    assert cancelled.status is ApprovalStatus.CANCELLED
+    assert engine.pending_for_workflow("wf1") == ()
+
+
+def test_cancel_is_idempotent_on_a_decided_approval() -> None:
+    engine = _engine()
+    aid = _request(engine)
+    engine.approve(aid, actor="roman", plan_fingerprint="fp-abc")
+    # cancelling an already-approved approval leaves it approved, does not raise
+    assert engine.cancel(aid).status is ApprovalStatus.APPROVED
+
+
 def test_pending_for_workflow_lists_open_approvals() -> None:
     engine = _engine()
     _request(engine)

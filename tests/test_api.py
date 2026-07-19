@@ -91,4 +91,4 @@ def test_double_approval_is_conflict() -> None:
         f"/workflows/{wid}/approvals/{approval_id}/approve", json={"actor": "roman"}
     )
     assert second.status_code == 409
-    assert second.json()["code"] == "approval_already_decided"
+    assert second.json()["code"] == "state_transition_error"

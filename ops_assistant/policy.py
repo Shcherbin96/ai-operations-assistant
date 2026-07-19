@@ -89,6 +89,12 @@ class PolicyEngine:
             raise PlanValidationError("plan contains duplicate step ids")
         known_ids = set(ids)
 
+        for step in plan.steps:
+            for dep in step.depends_on:
+                if dep not in known_ids:
+                    raise PlanValidationError(f"step {step.id} depends on unknown step '{dep}'")
+        _reject_dependency_cycles(plan)
+
         validated: list[ValidatedStep] = []
         for step in plan.steps:
             spec = self._registry.require(step.tool)  # UnknownToolError if missing
@@ -101,10 +107,6 @@ class PolicyEngine:
                     raise ArgumentError(
                         f"step {step.id}: {step.tool} requires argument '{required}'"
                     )
-
-            for dep in step.depends_on:
-                if dep not in known_ids:
-                    raise PlanValidationError(f"step {step.id} depends on unknown step '{dep}'")
 
             resolved = spec.risk
             if resolved in self._config.disabled_tiers:
@@ -127,3 +129,29 @@ class PolicyEngine:
             )
 
         return ValidatedPlan(summary=plan.summary, steps=validated)
+
+
+def _reject_dependency_cycles(plan: Plan) -> None:
+    """Raise if the steps' ``depends_on`` graph contains a cycle or self-loop.
+
+    A cyclic plan would pass every per-step check yet never become runnable —
+    each step waits forever on another — wedging the workflow. We refuse it at
+    validation instead. Assumes every ``depends_on`` id has already been checked
+    to exist.
+    """
+    graph = {step.id: list(step.depends_on) for step in plan.steps}
+    # DFS three-colouring: 0=unvisited, 1=on current path, 2=done.
+    color: dict[str, int] = dict.fromkeys(graph, 0)
+
+    def visit(node: str) -> None:
+        color[node] = 1
+        for dep in graph[node]:
+            if color[dep] == 1:
+                raise PlanValidationError(f"plan has a dependency cycle involving step '{node}'")
+            if color[dep] == 0:
+                visit(dep)
+        color[node] = 2
+
+    for step_id in graph:
+        if color[step_id] == 0:
+            visit(step_id)
