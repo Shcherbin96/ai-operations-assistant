@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     llm_model: str | None = None
     # Knowledge base directory (markdown). Adds the knowledge.search tool if non-empty.
     knowledge_dir: str = "knowledge_base"
+    # n8n execution layer. All three set -> the n8n.run tool (allowlisted, gated).
+    n8n_base_url: str | None = None
+    n8n_secret: str | None = None
+    n8n_workflows: str = ""  # comma-separated workflow allowlist
 
 
 @lru_cache

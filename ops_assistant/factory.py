@@ -68,6 +68,14 @@ def service_from_settings(settings: Settings) -> OpsService:  # pragma: no cover
     if kb.chunks:
         registry.register(build_knowledge_tool(kb))
 
+    if settings.n8n_base_url and settings.n8n_secret and settings.n8n_workflows:
+        from ops_assistant.n8n.live import HttpN8nClient
+        from ops_assistant.n8n.tools import build_n8n_tool
+
+        workflows = [w.strip() for w in settings.n8n_workflows.split(",") if w.strip()]
+        n8n_client = HttpN8nClient(settings.n8n_base_url, settings.n8n_secret)
+        registry.register(build_n8n_tool(n8n_client, workflows))
+
     planner = None
     if settings.llm_api_key and settings.llm_model:
         from ops_assistant.planner.llm import LLMPlanner

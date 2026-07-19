@@ -71,6 +71,7 @@ omit = [
     "ops_assistant/gworkspace/live.py",    # live Gmail/Calendar API I/O
     "ops_assistant/gworkspace/__main__.py",  # auth entrypoint
     "ops_assistant/planner/openai_client.py",  # live OpenAI-compatible LLM I/O
+    "ops_assistant/n8n/live.py",               # live n8n webhook I/O
 ]
 
 [tool.coverage.report]
