@@ -163,10 +163,12 @@ class OpsService:
         approval_store: ApprovalStore | None = None,
         audit_store: AuditStore | None = None,
         idempotency_store: IdempotencyStore | None = None,
+        allowed_tools: frozenset[str] | None = None,
     ) -> None:
         self._planner = planner or DemoPlanner()
         self._registry = registry or build_sandbox_registry()
         self._policy = PolicyEngine(self._registry, policy_config or PolicyConfig())
+        self._allowed_tools = allowed_tools
         self._audit: AuditStore = audit_store or AuditLog(clock=clock)
         self._approvals = ApprovalEngine(clock=clock, id_factory=id_factory, store=approval_store)
         self._gateway = ToolGateway(self._registry, self._audit, idempotency_store)
@@ -176,9 +178,16 @@ class OpsService:
         # Sync endpoints run in a threadpool; this lock serializes state mutations
         # within the process. Across processes, correctness rests on the database:
         # workflow writes use optimistic version locking (ConflictError) and
-        # approval decisions are a compare-and-set. Known gap: the approval, tool
-        # execution, and workflow save are separate transactions, so a crash mid-
-        # approve can wedge a workflow — a single unit-of-work is future work.
+        # approval decisions are a compare-and-set.
+        #
+        # Deliberate trade-off (see docs/adr/0005-single-process-locking.md): it is
+        # ONE lock, held across planning (LLM) and execution (tool I/O), so unrelated
+        # workflows serialize behind a slow provider. Chosen for obviously-correct
+        # simplicity at portfolio scale; per-workflow locking is the documented
+        # upgrade. Known gap: approval, tool execution, and workflow save are
+        # separate transactions, so a crash mid-approve can wedge a workflow — the
+        # retry path recovers the common case (see ``approve``); a single
+        # unit-of-work is the fuller fix.
         self._lock = threading.RLock()
 
     # --- Public API ---
@@ -211,7 +220,7 @@ class OpsService:
 
             self._to(wf, WorkflowStatus.VALIDATING)
             try:
-                validated = self._policy.validate(plan)
+                validated = self._policy.validate(plan, allowed_tools=self._allowed_tools)
             except OpsAssistantError:
                 self._to(wf, WorkflowStatus.FAILED)
                 self._audit.append(wid, AuditEventType.WORKFLOW_FAILED, actor="policy")

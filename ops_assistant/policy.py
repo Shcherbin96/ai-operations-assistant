@@ -2,7 +2,8 @@
 
 This is the security core. For every step it:
 
-1. confirms the tool exists (in the registry) and is allowed for the caller,
+1. confirms the tool exists (in the registry) and, if the deployment configured a
+   tool allowlist, that the tool is on it,
 2. confirms the required arguments are present,
 3. re-derives the **real** risk tier from the registry — never from the plan,
 4. rejects tiers disabled by policy (e.g. destructive actions in the MVP),

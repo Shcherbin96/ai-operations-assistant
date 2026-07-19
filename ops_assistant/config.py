@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     approval_ttl_seconds: int = 3600
+    # Optional deployment-wide tool allowlist (comma-separated tool names). Empty ->
+    # every registered tool is permitted. A plan using a tool outside the list is
+    # refused by the policy engine.
+    allowed_tools: str = ""
     # Postgres DSN. Unset -> the app runs fully in-memory (keyless demo).
     database_url: str | None = None
     # Telegram bot token (from @BotFather). Unset -> the Telegram bot is disabled.
